@@ -14,6 +14,7 @@ import (
 )
 
 type ClassDocsIn struct {
+	ProjectArg
 	Name      string `json:"name,omitempty" jsonschema:"class, built-in type or scope: CharacterBody2D, Vector2, @GlobalScope, @GDScript; also Class.member"`
 	Member    string `json:"member,omitempty" jsonschema:"method, property, signal, enum or constant; looked up through base classes"`
 	Search    string `json:"search,omitempty" jsonschema:"find classes and members whose name contains this text"`
@@ -33,16 +34,21 @@ const classDocsDescription = `Look up the API of the installed Godot version (no
 Godot 3 names (KinematicBody2D, instance(), yield...) are recognised and mapped to their Godot 4 replacements.
 The first call dumps the engine's API reference (a few seconds, cached per engine version).`
 
-func registerDocsTools(s *mcp.Server, d *Deps) {
+func registerDocsTools(s *mcp.Server, w *Workspace) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "godot_class_docs",
 		Description: classDocsDescription,
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ClassDocsIn) (*mcp.CallToolResult, ClassDocsOut, error) {
+		// Справка по движку от проекта не зависит; проект нужен только для его class_name.
+		d, err := w.Deps(in.Project)
+		if err != nil && !(in.Project == "" && errors.Is(err, errNoProject)) {
+			return nil, ClassDocsOut{}, err
+		}
 		if in.Name == "" && in.Search == "" {
 			return nil, ClassDocsOut{}, errors.New("pass name (optionally with member) or search")
 		}
-		idx, err := d.Docs.Index(ctx)
+		idx, err := w.Docs.Index(ctx)
 		if err != nil {
 			return nil, ClassDocsOut{}, err
 		}
@@ -65,6 +71,9 @@ var (
 // projectClasses читает class_name проекта из кеша глобальных классов
 // (.godot/global_script_class_cache.cfg; появляется после импорта).
 func projectClasses(d *Deps) []docs.ProjectClass {
+	if d == nil {
+		return nil
+	}
 	data, err := os.ReadFile(filepath.Join(d.Sandbox.Root(), ".godot", "global_script_class_cache.cfg"))
 	if err != nil {
 		return nil

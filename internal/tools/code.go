@@ -19,6 +19,7 @@ import (
 // Навигация по коду через языковой сервер фонового редактора (см. internal/lsp).
 
 type SymbolInfoIn struct {
+	ProjectArg
 	Path       string `json:"path" jsonschema:"res:// path of the .gd file where the symbol is used or declared"`
 	Symbol     string `json:"symbol,omitempty" jsonschema:"identifier to look up; without line, its first occurrence in the file is used"`
 	Line       int    `json:"line,omitempty" jsonschema:"1-based line; the symbol is searched on this line"`
@@ -42,6 +43,7 @@ type SymbolInfoOut struct {
 }
 
 type FindSymbolIn struct {
+	ProjectArg
 	Query         string `json:"query,omitempty" jsonschema:"find functions, variables, signals, constants, classes whose name contains this text, across all project scripts"`
 	Path          string `json:"path,omitempty" jsonschema:"res:// .gd file: without query, return its outline; with query, search only in it"`
 	IncludeAddons bool   `json:"include_addons,omitempty" jsonschema:"also search scripts under addons/"`
@@ -68,7 +70,7 @@ const (
 	maxSymbols    = 150
 )
 
-func registerCodeTools(s *mcp.Server, d *Deps) {
+func registerCodeTools(s *mcp.Server, w *Workspace) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "godot_symbol_info",
 		Description: "What a symbol in a GDScript file is and where it comes from: signature and doc comment (hover), " +
@@ -76,6 +78,10 @@ func registerCodeTools(s *mcp.Server, d *Deps) {
 			"or path + line + symbol. Engine members have no definition in the project; use godot_class_docs for them.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in SymbolInfoIn) (*mcp.CallToolResult, SymbolInfoOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, SymbolInfoOut{}, err
+		}
 		out, err := symbolInfo(ctx, d, in)
 		return nil, out, err
 	})
@@ -86,6 +92,10 @@ func registerCodeTools(s *mcp.Server, d *Deps) {
 			"by part of the name, or get the outline of one script (path without query).",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in FindSymbolIn) (*mcp.CallToolResult, FindSymbolOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, FindSymbolOut{}, err
+		}
 		out, err := findSymbol(ctx, d, in)
 		return nil, out, err
 	})

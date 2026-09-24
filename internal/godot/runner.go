@@ -64,12 +64,15 @@ type RunState struct {
 // Runner управляет запусками проекта.
 type Runner struct {
 	g        *Godot
-	seq      atomic.Int64
 	mu       sync.Mutex
 	runs     map[string]*Run
 	order    []string
 	override *overrideCfg
 }
+
+// runSeq нумерует запуски во всех проектах сразу: run_id уникален в процессе,
+// и по нему можно найти проект.
+var runSeq atomic.Int64
 
 func NewRunner(g *Godot) *Runner {
 	o := &overrideCfg{dir: g.ProjectDir}
@@ -143,7 +146,7 @@ func (r *Runner) Start(opt StartOptions) (*Run, error) {
 	}
 
 	run := &Run{
-		ID:        fmt.Sprintf("run-%d", r.seq.Add(1)),
+		ID:        fmt.Sprintf("run-%d", runSeq.Add(1)),
 		Scene:     opt.Scene,
 		Args:      args,
 		StartedAt: time.Now(),

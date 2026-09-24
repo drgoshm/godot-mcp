@@ -16,6 +16,7 @@ import (
 // ---- godot_run_project ----
 
 type RunProjectIn struct {
+	ProjectArg
 	Scene       string   `json:"scene,omitempty" jsonschema:"res:// or uid:// scene to run; default is the project's main scene"`
 	Headless    bool     `json:"headless,omitempty" jsonschema:"run without a window (no rendering; logic, physics and prints still work)"`
 	QuitAfter   int      `json:"quit_after,omitempty" jsonschema:"quit after N frames: handy as a smoke test that the scene loads and runs"`
@@ -28,6 +29,7 @@ type RunProjectIn struct {
 // ---- godot_get_output ----
 
 type GetOutputIn struct {
+	ProjectArg
 	RunID       string `json:"run_id,omitempty" jsonschema:"run to read; default is the latest run"`
 	Since       int64  `json:"since,omitempty" jsonschema:"return only lines after this seq (use next_since from the previous call)"`
 	MaxLines    int    `json:"max_lines,omitempty" jsonschema:"max lines to return (default 200)"`
@@ -47,6 +49,7 @@ type RunOutput struct {
 // ---- godot_stop_project ----
 
 type StopProjectIn struct {
+	ProjectArg
 	RunID string `json:"run_id,omitempty" jsonschema:"run to stop; default is the latest run"`
 }
 
@@ -54,7 +57,7 @@ type ListRunsOut struct {
 	Runs []godot.RunState `json:"runs"`
 }
 
-func registerRunTools(s *mcp.Server, d *Deps) {
+func registerRunTools(s *mcp.Server, w *Workspace) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "godot_run_project",
 		Description: "Start the game (or one scene) in the background and return its run_id plus the first seconds of output " +
@@ -62,6 +65,10 @@ func registerRunTools(s *mcp.Server, d *Deps) {
 			"While it runs, inspect and drive it with godot_game_tree, godot_game_eval, godot_game_set, godot_game_input " +
 			"and godot_game_screenshot (a temporary autoload bridge is added via override.cfg; no_bridge turns it off).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in RunProjectIn) (*mcp.CallToolResult, RunOutput, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, RunOutput{}, err
+		}
 		scene, err := resolveScene(d, in.Scene)
 		if err != nil {
 			return nil, RunOutput{}, err
@@ -82,6 +89,10 @@ func registerRunTools(s *mcp.Server, d *Deps) {
 		Description: "Read new output of a running or finished game since a cursor, with parsed errors (file:line, backtrace).",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in GetOutputIn) (*mcp.CallToolResult, RunOutput, error) {
+		d, err := w.DepsForRun(in.Project, in.RunID)
+		if err != nil {
+			return nil, RunOutput{}, err
+		}
 		run, err := d.Runner.Get(in.RunID)
 		if err != nil {
 			return nil, RunOutput{}, err
@@ -101,6 +112,10 @@ func registerRunTools(s *mcp.Server, d *Deps) {
 		Description: "Stop a running game (SIGTERM, then SIGKILL after 3s). Returns final status and all errors from the buffered output.",
 		Annotations: &mcp.ToolAnnotations{IdempotentHint: true},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in StopProjectIn) (*mcp.CallToolResult, RunOutput, error) {
+		d, err := w.DepsForRun(in.Project, in.RunID)
+		if err != nil {
+			return nil, RunOutput{}, err
+		}
 		run, err := d.Runner.Stop(ctx, in.RunID)
 		if err != nil {
 			return nil, RunOutput{}, err
@@ -112,7 +127,11 @@ func registerRunTools(s *mcp.Server, d *Deps) {
 		Name:        "godot_list_runs",
 		Description: "List recent game runs with their status.",
 		Annotations: readOnly(),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListRunsOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProjectOnlyIn) (*mcp.CallToolResult, ListRunsOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, ListRunsOut{}, err
+		}
 		runs := d.Runner.List()
 		if runs == nil {
 			runs = []godot.RunState{}

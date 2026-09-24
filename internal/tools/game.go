@@ -18,6 +18,7 @@ import (
 // ("/root/Main/Player") или относительно текущей сцены ("Player").
 
 type GameTreeIn struct {
+	ProjectArg
 	RunID      string   `json:"run_id,omitempty" jsonschema:"run to inspect; default is the latest run"`
 	Node       string   `json:"node,omitempty" jsonschema:"subtree root: absolute (/root/Main) or relative to the current scene; default /root"`
 	Depth      int      `json:"depth,omitempty" jsonschema:"how many levels to descend (default 4)"`
@@ -25,23 +26,27 @@ type GameTreeIn struct {
 }
 
 type GameEvalIn struct {
+	ProjectArg
 	RunID      string `json:"run_id,omitempty" jsonschema:"run to query; default is the latest run"`
 	Expression string `json:"expression" jsonschema:"Godot Expression evaluated with the node as self, e.g. position, velocity.length(), get_node('Gun').ammo, is_on_floor(); variables tree and scene are available"`
 	Node       string `json:"node,omitempty" jsonschema:"node used as self; default is the current scene"`
 }
 
 type GameSetIn struct {
+	ProjectArg
 	RunID      string         `json:"run_id,omitempty" jsonschema:"run to change; default is the latest run"`
 	Node       string         `json:"node" jsonschema:"node to change: absolute or relative to the current scene"`
 	Properties map[string]any `json:"properties" jsonschema:"values to set; strings are parsed as Godot literals for non-string properties (\"Vector2(1, 2)\"); \"position:x\" sets one component"`
 }
 
 type GameInputIn struct {
+	ProjectArg
 	RunID string           `json:"run_id,omitempty" jsonschema:"run to send input to; default is the latest run"`
 	Steps []map[string]any `json:"steps" jsonschema:"input steps run in order"`
 }
 
 type GameScreenshotIn struct {
+	ProjectArg
 	RunID    string `json:"run_id,omitempty" jsonschema:"run to capture; default is the latest run"`
 	MaxWidth int    `json:"max_width,omitempty" jsonschema:"scale the image down to this width (default 1280)"`
 }
@@ -57,13 +62,17 @@ const gameInputDescription = `Send input to the running game, step by step, wait
 Events go through Input.parse_input_event, so both Input.is_action_pressed() and _input() see them. Works headless too.
 Hold an action and check the result: [{"action": "move_right"}, {"wait": 0.5}, {"action": "move_right", "pressed": false}] then godot_game_eval.`
 
-func registerGameTools(s *mcp.Server, d *Deps) {
+func registerGameTools(s *mcp.Server, w *Workspace) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "godot_game_tree",
 		Description: "Live scene tree of the running game: node names, types, paths, scripts, instanced scenes, " +
 			"plus any property values you ask for. Also returns the current scene, pause state, frame and FPS.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in GameTreeIn) (*mcp.CallToolResult, map[string]any, error) {
+		d, err := w.DepsForRun(in.Project, in.RunID)
+		if err != nil {
+			return nil, nil, err
+		}
 		args := map[string]any{"node": orDefault(in.Node, "/root"), "depth": in.Depth, "properties": in.Properties}
 		if in.Depth <= 0 {
 			args["depth"] = 4
@@ -78,6 +87,10 @@ func registerGameTools(s *mcp.Server, d *Deps) {
 			"(position, velocity, health, is_on_floor()) or call methods (take_damage(10), get_tree().reload_current_scene()). " +
 			"Expressions cannot assign; use godot_game_set for that.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in GameEvalIn) (*mcp.CallToolResult, map[string]any, error) {
+		d, err := w.DepsForRun(in.Project, in.RunID)
+		if err != nil {
+			return nil, nil, err
+		}
 		if in.Expression == "" {
 			return nil, nil, errors.New("expression is empty")
 		}
@@ -90,6 +103,10 @@ func registerGameTools(s *mcp.Server, d *Deps) {
 		Description: "Set properties of a node in the running game (not saved to the scene file). Returns the values after the change.",
 		Annotations: &mcp.ToolAnnotations{IdempotentHint: true},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in GameSetIn) (*mcp.CallToolResult, map[string]any, error) {
+		d, err := w.DepsForRun(in.Project, in.RunID)
+		if err != nil {
+			return nil, nil, err
+		}
 		if in.Node == "" || len(in.Properties) == 0 {
 			return nil, nil, errors.New("node and properties are required")
 		}
@@ -101,6 +118,10 @@ func registerGameTools(s *mcp.Server, d *Deps) {
 		Name:        "godot_game_input",
 		Description: gameInputDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in GameInputIn) (*mcp.CallToolResult, map[string]any, error) {
+		d, err := w.DepsForRun(in.Project, in.RunID)
+		if err != nil {
+			return nil, nil, err
+		}
 		if len(in.Steps) == 0 {
 			return nil, nil, errors.New("steps is empty")
 		}
@@ -113,6 +134,10 @@ func registerGameTools(s *mcp.Server, d *Deps) {
 		Description: "Capture the current frame of the running game as an image (the game must not be headless).",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in GameScreenshotIn) (*mcp.CallToolResult, FrameInfo, error) {
+		d, err := w.DepsForRun(in.Project, in.RunID)
+		if err != nil {
+			return nil, FrameInfo{}, err
+		}
 		raw, err := gameCallRaw(ctx, d, in.RunID, "screenshot", nil, 15*time.Second)
 		if err != nil {
 			return nil, FrameInfo{}, err

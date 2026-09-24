@@ -15,6 +15,7 @@ import (
 )
 
 type RunTestsIn struct {
+	ProjectArg
 	Framework      string   `json:"framework,omitempty" jsonschema:"gut or gdunit4; detected from addons/ when only one is installed"`
 	Paths          []string `json:"paths,omitempty" jsonschema:"res:// test directories or files; default: .gutconfig.json for GUT, else res://test or res://tests"`
 	Test           string   `json:"test,omitempty" jsonschema:"GUT only: run tests whose name contains this text"`
@@ -55,12 +56,16 @@ var frameworks = []framework{
 // Шум от --remote-debug tcp://127.0.0.1:0 (см. runTests).
 var remoteDebugNoise = []string{"remote port number", "Remote Debugger: Unable to connect"}
 
-func registerTestTools(s *mcp.Server, d *Deps) {
+func registerTestTools(s *mcp.Server, w *Workspace) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "godot_run_tests",
 		Description: runTestsDescription,
 		Annotations: &mcp.ToolAnnotations{IdempotentHint: true},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in RunTestsIn) (*mcp.CallToolResult, RunTestsOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, RunTestsOut{}, err
+		}
 		out, err := runTests(ctx, d, in)
 		return nil, out, err
 	})

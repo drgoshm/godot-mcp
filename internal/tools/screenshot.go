@@ -22,6 +22,7 @@ const (
 )
 
 type ScreenshotIn struct {
+	ProjectArg
 	Scene      string   `json:"scene,omitempty" jsonschema:"res:// or uid:// scene to run; default is the project's main scene"`
 	Frames     []int    `json:"frames,omitempty" jsonschema:"frame numbers to capture (default [60]); frame N shows the game after N/fps seconds; up to 8 frames, at most 3600"`
 	FPS        int      `json:"fps,omitempty" jsonschema:"fixed frame rate for the recording (default 60)"`
@@ -57,12 +58,16 @@ var (
 	movieStatsRe = regexp.MustCompile(`^(-{20,}|Done recording movie|\d+ frames at \d+ FPS|CPU render time|GPU render time|Encoding time)`)
 )
 
-func registerScreenshotTools(s *mcp.Server, d *Deps) {
+func registerScreenshotTools(s *mcp.Server, w *Workspace) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "godot_screenshot",
 		Description: screenshotDescription,
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ScreenshotIn) (*mcp.CallToolResult, ScreenshotOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, ScreenshotOut{}, err
+		}
 		return screenshot(ctx, d, in)
 	})
 }

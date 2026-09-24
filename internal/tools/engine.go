@@ -29,9 +29,18 @@ type ProjectInfoOut struct {
 	EngineVersion string        `json:"engine_version"`
 }
 
+func projectInfo(d *Deps) (*mcp.CallToolResult, ProjectInfoOut, error) {
+	info, err := d.Sandbox.LoadInfo()
+	if err != nil {
+		return nil, ProjectInfoOut{}, err
+	}
+	return nil, ProjectInfoOut{Project: info, Root: d.Sandbox.Root(), EngineVersion: d.Version}, nil
+}
+
 // ---- godot_check_script ----
 
 type CheckScriptIn struct {
+	ProjectArg
 	Paths []string `json:"paths" jsonschema:"res:// paths of .gd files to check"`
 }
 
@@ -59,6 +68,7 @@ type ImportOut struct {
 // ---- godot_run_script ----
 
 type RunScriptIn struct {
+	ProjectArg
 	Code           string `json:"code" jsonschema:"GDScript source that extends SceneTree; do the work in _init() and call quit()"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"kill after this many seconds (default 30, max 300)"`
 }
@@ -66,6 +76,7 @@ type RunScriptIn struct {
 // ---- godot_create_scene ----
 
 type CreateSceneIn struct {
+	ProjectArg
 	Path        string         `json:"path" jsonschema:"res:// path of the scene to create, ending in .tscn"`
 	Root        map[string]any `json:"root" jsonschema:"root node spec: {type or scene, name, script?, properties?, groups?, children?[]}; children use the same shape"`
 	Connections []Connection   `json:"connections,omitempty" jsonschema:"signal connections saved in the scene"`
@@ -104,17 +115,17 @@ Other keys of the object are the resource's properties (same rules, nesting allo
 Connect signals with "connections": [{"from": "UI/Start", "signal": "pressed", "to": ".", "method": "_on_start_pressed"}];
 paths are relative to the root. The method must already exist in the receiver's script and accept the signal's arguments.`
 
-func registerEngineTools(s *mcp.Server, d *Deps) {
+func registerEngineTools(s *mcp.Server, w *Workspace) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "godot_project_info",
 		Description: "Project summary from project.godot: name, main scene, engine features, autoloads, input actions. Call this first.",
 		Annotations: readOnly(),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ProjectInfoOut, error) {
-		info, err := d.Sandbox.LoadInfo()
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProjectOnlyIn) (*mcp.CallToolResult, ProjectInfoOut, error) {
+		d, err := w.Deps(in.Project)
 		if err != nil {
 			return nil, ProjectInfoOut{}, err
 		}
-		return nil, ProjectInfoOut{Project: info, Root: d.Sandbox.Root(), EngineVersion: d.Version}, nil
+		return projectInfo(d)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -124,6 +135,10 @@ func registerEngineTools(s *mcp.Server, d *Deps) {
 			"the first call starts it in a few seconds), otherwise godot --check-only per file.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in CheckScriptIn) (*mcp.CallToolResult, CheckScriptOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, CheckScriptOut{}, err
+		}
 		if len(in.Paths) == 0 {
 			return nil, CheckScriptOut{}, errors.New("paths is empty")
 		}
@@ -183,7 +198,11 @@ func registerEngineTools(s *mcp.Server, d *Deps) {
 		Description: "Run the Godot importer headlessly: imports new assets and refreshes the global class_name cache. " +
 			"Needed after adding assets or new class_name scripts, and once for a freshly cloned project.",
 		Annotations: &mcp.ToolAnnotations{IdempotentHint: true},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ImportOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProjectOnlyIn) (*mcp.CallToolResult, ImportOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, ImportOut{}, err
+		}
 		res, err := d.Godot.Import(ctx)
 		if err != nil {
 			return nil, ImportOut{}, err
@@ -197,6 +216,10 @@ func registerEngineTools(s *mcp.Server, d *Deps) {
 			"Useful for inspecting resources, batch edits via ResourceSaver, or querying ClassDB. Code runs with full engine and OS access.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in RunScriptIn) (*mcp.CallToolResult, *godot.Result, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, nil, err
+		}
 		if !extendsMainLoop(in.Code) {
 			return nil, nil, errors.New("script must start with 'extends SceneTree' (or MainLoop); put the work in _init() and finish with quit()")
 		}
@@ -209,6 +232,10 @@ func registerEngineTools(s *mcp.Server, d *Deps) {
 		Description: createSceneDescription,
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in CreateSceneIn) (*mcp.CallToolResult, CreateSceneOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, CreateSceneOut{}, err
+		}
 		return createScene(ctx, d, in)
 	})
 }

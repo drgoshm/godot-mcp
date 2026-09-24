@@ -13,7 +13,7 @@ import (
 	"github.com/drgoshm/godot-mcp/internal/project"
 )
 
-// Deps — всё, что нужно инструментам.
+// Deps — один открытый проект: всё, что нужно инструментам для работы с ним.
 type Deps struct {
 	Sandbox *project.Sandbox
 	Godot   *godot.Godot
@@ -24,19 +24,20 @@ type Deps struct {
 }
 
 // Register добавляет все инструменты на сервер.
-func Register(s *mcp.Server, d *Deps) {
-	if d.Docs == nil {
-		d.Docs = &docs.Loader{Bin: d.Godot.Bin, Version: d.Version}
+func Register(s *mcp.Server, w *Workspace) {
+	if w.Docs == nil {
+		w.Docs = &docs.Loader{Bin: w.Bin, Version: w.Version}
 	}
-	registerFileTools(s, d)
-	registerEngineTools(s, d)
-	registerSceneTools(s, d)
-	registerScreenshotTools(s, d)
-	registerTestTools(s, d)
-	registerDocsTools(s, d)
-	registerGameTools(s, d)
-	registerCodeTools(s, d)
-	registerRunTools(s, d)
+	registerProjectTools(s, w)
+	registerFileTools(s, w)
+	registerEngineTools(s, w)
+	registerSceneTools(s, w)
+	registerScreenshotTools(s, w)
+	registerTestTools(s, w)
+	registerDocsTools(s, w)
+	registerGameTools(s, w)
+	registerCodeTools(s, w)
+	registerRunTools(s, w)
 }
 
 func readOnly() *mcp.ToolAnnotations { return &mcp.ToolAnnotations{ReadOnlyHint: true} }

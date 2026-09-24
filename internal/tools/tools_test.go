@@ -12,9 +12,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/drgoshm/godot-mcp/internal/docs"
-	"github.com/drgoshm/godot-mcp/internal/godot"
-	"github.com/drgoshm/godot-mcp/internal/lsp"
-	"github.com/drgoshm/godot-mcp/internal/project"
 )
 
 // Сквозной тест через настоящий MCP-протокол (in-memory транспорт).
@@ -98,21 +95,21 @@ func newSessionWith(t *testing.T, name string, withLSP bool) (callFunc, string, 
 	must(t, os.WriteFile(filepath.Join(dir, "project.godot"),
 		[]byte("config_version=5\n\n[application]\n\nconfig/name=\""+name+"\"\nrun/main_scene=\"res://main.tscn\"\n"), 0o644))
 
-	sb, err := project.NewSandbox(dir)
-	must(t, err)
-	g := &godot.Godot{Bin: bin, ProjectDir: sb.Root()}
-	runner := godot.NewRunner(g)
-	t.Cleanup(func() { runner.StopAll(context.Background()) })
-
-	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-test", Version: "test"}, nil)
-	// Кеш справки — во временном каталоге теста, а не в каталоге пользователя.
-	deps := &Deps{Sandbox: sb, Godot: g, Runner: runner, Version: "test",
+	// Кеш справки — во временном каталоге теста, список проектов редактора пользователя не читаем.
+	ws := &Workspace{Bin: bin, Version: "test", UseLSP: withLSP, EditorProjects: "-",
 		Docs: &docs.Loader{Bin: bin, Version: "test", CacheDir: t.TempDir()}}
-	if withLSP {
-		deps.LSP = &lsp.Checker{Bin: bin, ProjectDir: sb.Root()}
-		t.Cleanup(deps.LSP.Close)
-	}
-	Register(server, deps)
+	_, err := ws.Select(dir)
+	must(t, err)
+	call, cs := connect(t, ws)
+	return call, dir, cs
+}
+
+// connect поднимает сервер на ws и подключает к нему клиента через in-memory транспорт.
+func connect(t *testing.T, ws *Workspace) (callFunc, *mcp.ClientSession) {
+	t.Helper()
+	t.Cleanup(func() { ws.Close(context.Background()) })
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-test", Version: "test"}, nil)
+	Register(server, ws)
 
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()
@@ -142,7 +139,7 @@ func newSessionWith(t *testing.T, name string, withLSP bool) (callFunc, string, 
 		must(t, json.Unmarshal(raw, &out))
 		return out, true
 	}
-	return call, dir, cs
+	return call, cs
 }
 
 // Встроенные подресурсы: {"_type": ...} в свойствах узла сохраняются

@@ -15,6 +15,7 @@ import (
 // ---- godot_scene_tree ----
 
 type SceneTreeIn struct {
+	ProjectArg
 	Path          string `json:"path" jsonschema:"res:// or uid:// path of a .tscn/.scn scene"`
 	Node          string `json:"node,omitempty" jsonschema:"return only this subtree, path relative to the scene root"`
 	MaxValueChars int    `json:"max_value_chars,omitempty" jsonschema:"longer property values are replaced by {\"_omitted\": ...} (default 400)"`
@@ -37,6 +38,7 @@ Huge values (e.g. tile data) are replaced by {"_omitted": "..."}; never write th
 // ---- godot_edit_scene ----
 
 type EditSceneIn struct {
+	ProjectArg
 	Path       string           `json:"path" jsonschema:"res:// or uid:// path of the scene to change"`
 	Operations []map[string]any `json:"operations" jsonschema:"operations applied in order; if one fails nothing is saved"`
 }
@@ -62,12 +64,16 @@ if any fails, the file is left untouched. Node paths are relative to the scene r
 Property values follow godot_create_scene rules. Set "script" with set_properties before properties it declares.
 Nodes inside an instanced scene can't be edited here; edit that scene instead. Read the scene first with godot_scene_tree.`
 
-func registerSceneTools(s *mcp.Server, d *Deps) {
+func registerSceneTools(s *mcp.Server, w *Workspace) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "godot_scene_tree",
 		Description: sceneTreeDescription,
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in SceneTreeIn) (*mcp.CallToolResult, SceneTreeOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, SceneTreeOut{}, err
+		}
 		var out SceneTreeOut
 		p, err := existingScene(d, in.Path)
 		if err != nil {
@@ -86,6 +92,10 @@ func registerSceneTools(s *mcp.Server, d *Deps) {
 		Description: editSceneDescription,
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in EditSceneIn) (*mcp.CallToolResult, EditSceneOut, error) {
+		d, err := w.Deps(in.Project)
+		if err != nil {
+			return nil, EditSceneOut{}, err
+		}
 		var out EditSceneOut
 		p, err := existingScene(d, in.Path)
 		if err != nil {
