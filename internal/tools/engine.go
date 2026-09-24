@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -213,56 +212,16 @@ func createScene(ctx context.Context, d *Deps, in CreateSceneIn) (*mcp.CallToolR
 		return nil, zero, errors.New("path must end in .tscn")
 	}
 	if _, err := os.Stat(abs); err == nil && !in.Overwrite {
-		return nil, zero, fmt.Errorf("%s already exists; set overwrite=true or edit it", in.Path)
+		return nil, zero, fmt.Errorf("%s already exists; set overwrite=true or change it with godot_edit_scene", in.Path)
 	}
 	if len(in.Root) == 0 {
 		return nil, zero, errors.New("root is required")
 	}
-
-	spec, err := json.Marshal(map[string]any{"path": d.Sandbox.ToRes(abs), "root": in.Root, "connections": in.Connections})
-	if err != nil {
-		return nil, zero, err
-	}
-	specFile, err := os.CreateTemp("", "godot-mcp-spec-*.json")
-	if err != nil {
-		return nil, zero, err
-	}
-	defer os.Remove(specFile.Name())
-	if _, err := specFile.Write(spec); err != nil {
-		specFile.Close()
-		return nil, zero, err
-	}
-	specFile.Close()
-
-	res, err := d.Godot.RunSource(ctx, sceneBuilderGD, 60*time.Second, "--spec="+specFile.Name())
-	if err != nil {
-		return nil, zero, err
-	}
-	var payload struct {
-		OK          bool   `json:"ok"`
-		Error       string `json:"error"`
-		Path        string `json:"path"`
-		UID         string `json:"uid"`
-		Nodes       int    `json:"nodes"`
-		Connections int    `json:"connections"`
-	}
-	if !findResult(res.Output, &payload) {
-		return nil, zero, fmt.Errorf("scene builder produced no result (exit %d):\n%s", res.ExitCode, res.Output)
-	}
-	if !payload.OK {
-		return nil, zero, errors.New("scene not created: " + payload.Error)
-	}
-	return nil, CreateSceneOut{Path: payload.Path, UID: payload.UID, Nodes: payload.Nodes, Connections: payload.Connections}, nil
-}
-
-// findResult ищет строку MCP_RESULT:{...} в выводе служебного скрипта.
-func findResult(output string, v any) bool {
-	for _, line := range strings.Split(output, "\n") {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "MCP_RESULT:"); ok {
-			return json.Unmarshal([]byte(rest), v) == nil
-		}
-	}
-	return false
+	var out CreateSceneOut
+	err = runSceneTool(ctx, d, "scene not created", map[string]any{
+		"mode": "create", "path": d.Sandbox.ToRes(abs), "root": in.Root, "connections": in.Connections,
+	}, &out)
+	return nil, out, err
 }
 
 var extendsRe = regexp.MustCompile(`(?m)^\s*extends\s+(SceneTree|MainLoop)\b`)

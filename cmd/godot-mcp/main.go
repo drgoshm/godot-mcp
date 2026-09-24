@@ -76,7 +76,7 @@ func run(projectDir, godotBin string) error {
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp", Version: version}, &mcp.ServerOptions{
 		Instructions: "Tools for a Godot 4 project. Paths are res:// paths. Typical loop: godot_project_info -> " +
 			"read/edit files -> godot_check_script -> godot_run_project (quit_after for a smoke test) -> godot_get_output. " +
-			"Create scenes with godot_create_scene instead of hand-writing .tscn.",
+			"Create scenes with godot_create_scene and change them with godot_scene_tree + godot_edit_scene instead of hand-editing .tscn.",
 	})
 	tools.Register(server, &tools.Deps{Sandbox: sb, Godot: g, Runner: runner, Version: ver})
 

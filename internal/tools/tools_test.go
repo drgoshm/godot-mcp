@@ -381,6 +381,177 @@ func _process(_delta: float) -> bool:
 	}
 }
 
+// godot_scene_tree возвращает сцену в формате godot_create_scene (с круговой
+// проверкой), а godot_edit_scene правит её атомарно, сохраняя UID.
+func TestSceneTreeAndEdit(t *testing.T) {
+	call, dir := newSession(t, "Edit")
+	mustCall := func(name string, args map[string]any) map[string]any {
+		t.Helper()
+		out, ok := call(name, args)
+		if !ok {
+			t.Fatalf("%s: %v", name, out)
+		}
+		return out
+	}
+	mustCall("godot_write_file", map[string]any{"path": "res://player.gd", "content": "extends CharacterBody2D\n\nsignal hit\n\n@export var speed: float = 100.0\n\nfunc _on_hit() -> void:\n\tpass\n"})
+	mustCall("godot_create_scene", map[string]any{"path": "res://enemy.tscn", "root": map[string]any{
+		"type": "Area2D", "name": "Enemy", "children": []any{map[string]any{"type": "CollisionShape2D", "name": "Shape",
+			"properties": map[string]any{"shape": map[string]any{"_type": "CircleShape2D", "radius": 8}}}},
+	}})
+	points := make([]string, 60)
+	for i := range points {
+		points[i] = fmt.Sprintf("%d, %d", i*10, i*i)
+	}
+	created := mustCall("godot_create_scene", map[string]any{
+		"path": "res://level.tscn",
+		"root": map[string]any{"type": "Node2D", "name": "Level", "children": []any{
+			map[string]any{"type": "CharacterBody2D", "name": "Player", "script": "res://player.gd",
+				"properties": map[string]any{"speed": 250, "position": "Vector2(10, 20)"},
+				"children": []any{map[string]any{"type": "CollisionShape2D", "name": "Shape",
+					"properties": map[string]any{"shape": map[string]any{"_type": "RectangleShape2D", "size": "Vector2(32, 48)"}}}}},
+			map[string]any{"type": "CanvasLayer", "name": "UI", "children": []any{
+				map[string]any{"type": "Label", "name": "Score", "properties": map[string]any{"text": "0"}}}},
+			map[string]any{"scene": "res://enemy.tscn", "name": "Enemy1", "properties": map[string]any{"position": "Vector2(100, 0)"}},
+			map[string]any{"type": "Line2D", "name": "Path", "properties": map[string]any{"points": "PackedVector2Array(" + strings.Join(points, ", ") + ")"}},
+		}},
+		"connections": []any{map[string]any{"from": "Player", "signal": "hit", "to": "Player", "method": "_on_hit"}},
+	})
+	uid := created["uid"].(string)
+
+	// ---- чтение ----
+	tree := mustCall("godot_scene_tree", map[string]any{"path": uid, "max_value_chars": 100})
+	j := mustJSON(tree)
+	for _, want := range []string{
+		`"type":"Node2D"`, `"script":"res://player.gd"`, `"speed":250`, `"position":"Vector2(10, 20)"`,
+		`"shape":{"_type":"RectangleShape2D","size":"Vector2(32, 48)"}`,
+		`"scene":"res://enemy.tscn"`, `"path":"UI/Score"`, `"text":"0"`,
+		`"points":{"_omitted":"PackedVector2Array`,
+		`{"from":"Player","method":"_on_hit","signal":"hit","to":"Player"}`,
+	} {
+		if !strings.Contains(j, want) {
+			t.Errorf("scene_tree has no %s:\n%s", want, j)
+		}
+	}
+	if tree["path"] != "res://level.tscn" || tree["nodes"] != float64(7) {
+		t.Errorf("scene_tree header: path=%v nodes=%v", tree["path"], tree["nodes"])
+	}
+	sub := mustCall("godot_scene_tree", map[string]any{"path": "res://level.tscn", "node": "UI"})
+	if sub["root"].(map[string]any)["name"] != "UI" || sub["connections"] != nil {
+		t.Errorf("subtree: %s", mustJSON(sub))
+	}
+
+	// ---- круговая проверка: дерево -> create_scene -> то же дерево ----
+	root := tree["root"].(map[string]any)
+	if out, ok := call("godot_create_scene", map[string]any{"path": "res://copy.tscn", "root": root, "connections": tree["connections"]}); ok ||
+		!strings.Contains(fmt.Sprint(out["error"]), "omitted by godot_scene_tree") {
+		t.Errorf("writing an omitted value back must fail: %v", out)
+	}
+	var kept []any
+	for _, c := range root["children"].([]any) {
+		if c.(map[string]any)["name"] != "Path" {
+			kept = append(kept, c)
+		}
+	}
+	root["children"] = kept
+	mustCall("godot_create_scene", map[string]any{"path": "res://copy.tscn", "root": root, "connections": tree["connections"]})
+	orig := mustCall("godot_scene_tree", map[string]any{"path": "res://level.tscn"})
+	cp := mustCall("godot_scene_tree", map[string]any{"path": "res://copy.tscn"})
+	origRoot := orig["root"].(map[string]any)
+	var origKept []any
+	for _, c := range origRoot["children"].([]any) {
+		if c.(map[string]any)["name"] != "Path" {
+			origKept = append(origKept, c)
+		}
+	}
+	origRoot["children"] = origKept
+	if a, b := mustJSON(origRoot)+mustJSON(orig["connections"]), mustJSON(cp["root"])+mustJSON(cp["connections"]); a != b {
+		t.Errorf("round trip differs:\norig: %s\ncopy: %s", a, b)
+	}
+
+	// ---- правка ----
+	edited := mustCall("godot_edit_scene", map[string]any{"path": "res://level.tscn", "operations": []any{
+		map[string]any{"op": "set_properties", "path": "Player", "properties": map[string]any{"speed": 300}},
+		map[string]any{"op": "set_properties", "path": "Player/Shape", "properties": map[string]any{"shape": map[string]any{"_type": "CircleShape2D", "radius": 12}}},
+		map[string]any{"op": "add_node", "parent": "UI", "index": 0, "node": map[string]any{"type": "Label", "name": "Lives", "properties": map[string]any{"text": "3"}}},
+		map[string]any{"op": "rename", "path": "UI/Score", "name": "Points"},
+		map[string]any{"op": "add_node", "node": map[string]any{"type": "Node2D", "name": "Enemies"}},
+		map[string]any{"op": "move", "path": "Enemy1", "parent": "Enemies"},
+		map[string]any{"op": "groups", "path": "Player", "add": []any{"players"}},
+		map[string]any{"op": "disconnect", "from": "Player", "signal": "hit", "to": "Player", "method": "_on_hit"},
+		map[string]any{"op": "connect", "from": "Enemies/Enemy1", "signal": "body_entered", "to": ".", "method": "add_child"},
+		map[string]any{"op": "remove_node", "path": "Path"},
+	}})
+	if edited["uid"] != uid || edited["applied"] != float64(10) || edited["connections"] != float64(1) {
+		t.Errorf("edit_scene: %v (uid must stay %s)", edited, uid)
+	}
+	after := mustJSON(mustCall("godot_scene_tree", map[string]any{"path": "res://level.tscn"}))
+	for _, want := range []string{
+		`"speed":300`, `"shape":{"_type":"CircleShape2D","radius":12}`, `"groups":["players"]`,
+		`"path":"UI/Lives"`, `"path":"UI/Points"`, `"path":"Enemies/Enemy1"`,
+		`{"from":"Enemies/Enemy1","method":"add_child","signal":"body_entered","to":"."}`,
+	} {
+		if !strings.Contains(after, want) {
+			t.Errorf("after edit, scene_tree has no %s:\n%s", want, after)
+		}
+	}
+	for _, gone := range []string{`"name":"Path"`, `"method":"_on_hit"`, `"name":"Score"`} {
+		if strings.Contains(after, gone) {
+			t.Errorf("after edit, scene_tree still has %s:\n%s", gone, after)
+		}
+	}
+	if i, j := strings.Index(after, `"name":"Lives"`), strings.Index(after, `"name":"Points"`); i > j {
+		t.Errorf("Lives should be inserted before Points: %s", after)
+	}
+	out := mustCall("godot_run_script", map[string]any{"code": `extends SceneTree
+func _init() -> void:
+	var level: Node = (load("res://level.tscn") as PackedScene).instantiate()
+	print("SPEED=", level.get_node("Player").speed, " ENEMY=", level.get_node("Enemies/Enemy1/Shape").shape.radius)
+	level.free()
+	quit()
+`})
+	if j := mustJSON(out); !strings.Contains(j, "SPEED=300") || !strings.Contains(j, "ENEMY=8") {
+		t.Errorf("edited scene does not load as expected: %s", j)
+	}
+
+	// ---- ошибки: ничего не сохраняется ----
+	before, err := os.ReadFile(filepath.Join(dir, "level.tscn"))
+	must(t, err)
+	bad := []struct {
+		name string
+		ops  []any
+		want string
+	}{
+		{"atomic", []any{
+			map[string]any{"op": "set_properties", "path": "Player", "properties": map[string]any{"speed": 1}},
+			map[string]any{"op": "remove_node", "path": "Nope"},
+		}, "operations[1] remove_node: no node at 'Nope'"},
+		{"inside instance", []any{map[string]any{"op": "set_properties", "path": "Enemies/Enemy1/Shape", "properties": map[string]any{"disabled": true}}},
+			"belongs to the instanced scene res://enemy.tscn"},
+		{"remove root", []any{map[string]any{"op": "remove_node", "path": "."}}, "cannot remove the scene root"},
+		{"rename clash", []any{map[string]any{"op": "rename", "path": "UI/Lives", "name": "Points"}}, "already has a child named 'Points'"},
+		{"bad name", []any{map[string]any{"op": "rename", "path": "UI/Lives", "name": "a/b"}}, "not a valid node name"},
+		{"into itself", []any{map[string]any{"op": "move", "path": "Player", "parent": "Player/Shape"}}, "into itself or its own child"},
+		{"duplicate add", []any{map[string]any{"op": "add_node", "parent": "UI", "node": map[string]any{"type": "Label", "name": "Points"}}}, "operations[0] add_node: cannot name a node 'Points' under 'UI'"},
+		{"unknown op", []any{map[string]any{"op": "explode"}}, "unknown op"},
+		{"not connected", []any{map[string]any{"op": "disconnect", "from": "Player", "signal": "hit", "to": "Player", "method": "_on_hit"}}, "is not connected"},
+	}
+	for _, tc := range bad {
+		out, ok := call("godot_edit_scene", map[string]any{"path": "res://level.tscn", "operations": tc.ops})
+		msg := fmt.Sprint(out["error"])
+		if ok || !strings.Contains(msg, tc.want) || !strings.Contains(msg, "no changes were saved") {
+			t.Errorf("%s: want error containing %q, got %v", tc.name, tc.want, out)
+		}
+	}
+	afterBad, err := os.ReadFile(filepath.Join(dir, "level.tscn"))
+	must(t, err)
+	if string(before) != string(afterBad) {
+		t.Error("failed edits must not change the file")
+	}
+	if out, ok := call("godot_scene_tree", map[string]any{"path": "res://nope.tscn"}); ok || !strings.Contains(fmt.Sprint(out["error"]), "does not exist") {
+		t.Errorf("missing scene: %v", out)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

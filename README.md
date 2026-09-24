@@ -43,6 +43,8 @@ Claude Desktop / Claude Code (`.mcp.json` или `claude_desktop_config.json`):
 | `godot_check_script` | `--check-only` для одного или нескольких `.gd`, ошибки с файлом и строкой |
 | `godot_import` | headless-импорт ассетов и обновление кеша `class_name` |
 | `godot_create_scene` | сборка `.tscn` из JSON-дерева узлов через `PackedScene` + `ResourceSaver`, со встроенными подресурсами и сигналами |
+| `godot_scene_tree` | сцена в JSON в том же формате, что принимает `godot_create_scene`: узлы, изменённые свойства, инстансы, соединения |
+| `godot_edit_scene` | атомарная правка существующей сцены списком операций с сохранением UID |
 | `godot_run_script` | одноразовый GDScript (`extends SceneTree`) внутри проекта |
 | `godot_run_project` | запуск игры или сцены в фоне, возвращает `run_id` и первые секунды вывода |
 | `godot_get_output` | новый вывод по курсору `since`, long-poll, разобранные ошибки |
@@ -73,6 +75,12 @@ Claude Desktop / Claude Code (`.mcp.json` или `claude_desktop_config.json`):
 ```
 
 Метод должен уже существовать в скрипте получателя. Узлы, сигнал, метод и число аргументов (аргументы сигнала + `binds` против обязательных и необязательных параметров метода) проверяются при сборке. Поэтому ошибка вроде `UI/Sound:toggled -> .:_on_start_pressed: the method takes 0 arguments, but the signal passes 1` приходит сразу, а не во время игры. `flags` — это `CONNECT_*`: 1 — отложенный вызов, 4 — однократный.
+
+### Правка существующих сцен
+
+`godot_scene_tree` читает сцену через `SceneState` — ровно то, что лежит в файле, — и отдаёт её в формате `godot_create_scene`, так что прочитанное дерево можно сразу пересобрать. У каждого узла есть `path` относительно корня. Слишком большие значения (например, данные тайлов) заменяются заглушкой `{"_omitted": ...}`, записать её обратно нельзя.
+
+`godot_edit_scene` применяет операции по порядку: `add_node`, `remove_node`, `set_properties`, `rename`, `move`, `groups`, `connect`, `disconnect`. Если хоть одна не удалась, файл не меняется, а ошибка называет операцию: `operations[1] remove_node: no node at 'Nope'`. UID сцены, `unique_id` узлов и id внешних ресурсов сохраняются, поэтому diff содержит только сделанные изменения. Узлы внутри инстанцированной сцены здесь не правятся — ошибка подскажет, какую сцену открыть.
 
 ## Безопасность
 
