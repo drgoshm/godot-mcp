@@ -169,3 +169,6 @@ func hasScriptError(ds []Diagnostic) bool {
 	}
 	return false
 }
+
+// StripANSIBytes — StripANSI для []byte.
+func StripANSIBytes(b []byte) []byte { return ansiRe.ReplaceAll(b, nil) }

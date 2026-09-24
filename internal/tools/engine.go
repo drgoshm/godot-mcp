@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -43,6 +44,8 @@ type ScriptCheck struct {
 type CheckScriptOut struct {
 	AllOK   bool          `json:"all_ok"`
 	Results []ScriptCheck `json:"results"`
+	Via     string        `json:"via"`            // lsp | cli
+	Note    string        `json:"note,omitempty"` // почему пришлось обойтись без LSP
 }
 
 // ---- godot_import ----
@@ -115,8 +118,10 @@ func registerEngineTools(s *mcp.Server, d *Deps) {
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "godot_check_script",
-		Description: "Parse and type-check GDScript files without running them (godot --check-only). Returns errors with file and line.",
+		Name: "godot_check_script",
+		Description: "Parse and type-check GDScript files without running them. Returns errors (and, via the language server, warnings) " +
+			"with file and line. Uses a background headless editor's language server when available (milliseconds per file; " +
+			"the first call starts it in a few seconds), otherwise godot --check-only per file.",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in CheckScriptIn) (*mcp.CallToolResult, CheckScriptOut, error) {
 		if len(in.Paths) == 0 {
@@ -125,17 +130,46 @@ func registerEngineTools(s *mcp.Server, d *Deps) {
 		if len(in.Paths) > 50 {
 			return nil, CheckScriptOut{}, errors.New("at most 50 scripts per call")
 		}
-		out := CheckScriptOut{AllOK: true, Results: make([]ScriptCheck, len(in.Paths))}
+		out := CheckScriptOut{AllOK: true, Results: make([]ScriptCheck, len(in.Paths)), Via: "cli"}
+		var todo []int // индексы путей, которые прошли проверку и ждут анализа
+		for i, p := range in.Paths {
+			res, err := resolveScript(d, p)
+			if err != nil {
+				out.Results[i] = failCheck(p, err)
+				continue
+			}
+			out.Results[i].Path = res
+			todo = append(todo, i)
+		}
+
+		if d.LSP != nil && len(todo) > 0 {
+			paths := make([]string, len(todo))
+			for k, i := range todo {
+				paths[k] = out.Results[i].Path
+			}
+			diags, err := d.LSP.Check(ctx, paths)
+			if err == nil {
+				out.Via = "lsp"
+				for _, i := range todo {
+					out.Results[i] = lspCheck(out.Results[i].Path, diags[out.Results[i].Path])
+				}
+				todo = nil
+			} else {
+				log.Printf("language server check failed, using --check-only: %v", err)
+				out.Note = "language server unavailable (" + err.Error() + "); checked with godot --check-only"
+			}
+		}
+
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, 4) // каждый вызов — отдельный процесс Godot
-		for i, p := range in.Paths {
+		for _, i := range todo {
 			wg.Add(1)
-			go func(i int, p string) {
+			go func(i int) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				out.Results[i] = checkOne(ctx, d, p)
-			}(i, p)
+				out.Results[i] = checkOne(ctx, d, out.Results[i].Path)
+			}(i)
 		}
 		wg.Wait()
 		for _, r := range out.Results {
@@ -179,18 +213,32 @@ func registerEngineTools(s *mcp.Server, d *Deps) {
 	})
 }
 
-func checkOne(ctx context.Context, d *Deps, p string) ScriptCheck {
+// resolveScript проверяет, что путь — существующий .gd в проекте.
+func resolveScript(d *Deps, p string) (string, error) {
 	abs, err := d.Sandbox.Resolve(p)
 	if err != nil {
-		return failCheck(p, err)
+		return "", err
 	}
 	if !strings.HasSuffix(abs, ".gd") {
-		return failCheck(p, errors.New("not a .gd file"))
+		return "", errors.New("not a .gd file")
 	}
 	if _, err := os.Stat(abs); err != nil {
-		return failCheck(p, err)
+		return "", err
 	}
-	resPath := d.Sandbox.ToRes(abs)
+	return d.Sandbox.ToRes(abs), nil
+}
+
+// lspCheck: ошибки делают проверку неуспешной, предупреждения — нет.
+func lspCheck(resPath string, ds []godot.Diagnostic) ScriptCheck {
+	ok := true
+	for _, d := range ds {
+		ok = ok && d.Severity != "error"
+	}
+	return ScriptCheck{Path: resPath, OK: ok, Diagnostics: ds}
+}
+
+// checkOne — проверка отдельным процессом godot --check-only.
+func checkOne(ctx context.Context, d *Deps, resPath string) ScriptCheck {
 	res, err := d.Godot.CheckScript(ctx, resPath)
 	if err != nil {
 		return failCheck(resPath, err)

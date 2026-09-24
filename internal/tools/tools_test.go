@@ -13,6 +13,7 @@ import (
 
 	"github.com/drgoshm/godot-mcp/internal/docs"
 	"github.com/drgoshm/godot-mcp/internal/godot"
+	"github.com/drgoshm/godot-mcp/internal/lsp"
 	"github.com/drgoshm/godot-mcp/internal/project"
 )
 
@@ -28,8 +29,8 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("write_file failed")
 	}
 	out, _ := call("godot_check_script", map[string]any{"paths": []string{"res://scripts/player.gd"}})
-	if out["all_ok"] != false || !strings.Contains(mustJSON(out), `"line":5`) {
-		t.Fatalf("check_script should report line 5: %s", mustJSON(out))
+	if out["all_ok"] != false || out["via"] != "lsp" || !strings.Contains(mustJSON(out), `"line":5`) {
+		t.Fatalf("check_script should report line 5 via lsp: %s", mustJSON(out))
 	}
 	if _, ok := call("godot_edit_file", map[string]any{
 		"path": "res://scripts/player.gd", "old_str": "\tundefined_call()\n", "new_str": "",
@@ -83,6 +84,12 @@ type callFunc func(name string, args map[string]any) (map[string]any, bool)
 // через in-memory транспорт. Без GODOT_BIN тест пропускается.
 func newSession(t *testing.T, name string) (callFunc, string, *mcp.ClientSession) {
 	t.Helper()
+	return newSessionWith(t, name, true)
+}
+
+// newSessionWith: withLSP=false — check_script только через --check-only.
+func newSessionWith(t *testing.T, name string, withLSP bool) (callFunc, string, *mcp.ClientSession) {
+	t.Helper()
 	bin := os.Getenv("GODOT_BIN")
 	if bin == "" {
 		t.Skip("GODOT_BIN not set")
@@ -99,8 +106,13 @@ func newSession(t *testing.T, name string) (callFunc, string, *mcp.ClientSession
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-test", Version: "test"}, nil)
 	// Кеш справки — во временном каталоге теста, а не в каталоге пользователя.
-	Register(server, &Deps{Sandbox: sb, Godot: g, Runner: runner, Version: "test",
-		Docs: &docs.Loader{Bin: bin, Version: "test", CacheDir: t.TempDir()}})
+	deps := &Deps{Sandbox: sb, Godot: g, Runner: runner, Version: "test",
+		Docs: &docs.Loader{Bin: bin, Version: "test", CacheDir: t.TempDir()}}
+	if withLSP {
+		deps.LSP = &lsp.Checker{Bin: bin, ProjectDir: sb.Root()}
+		t.Cleanup(deps.LSP.Close)
+	}
+	Register(server, deps)
 
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()
@@ -577,4 +589,19 @@ func must(t *testing.T, err error) {
 func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// Без фонового редактора check_script работает через --check-only и находит то же самое.
+func TestCheckScriptCLI(t *testing.T) {
+	call, dir, _ := newSessionWith(t, "CLI", false)
+	writeFiles(t, dir, map[string]string{
+		"bad.gd":  "extends Node\n\nfunc _ready() -> void:\n\tundefined_call()\n",
+		"good.gd": "extends Node\n\nfunc _ready() -> void:\n\tpass\n",
+	})
+	out, ok := call("godot_check_script", map[string]any{"paths": []string{"res://bad.gd", "res://good.gd", "res://missing.gd"}})
+	j := mustJSON(out)
+	if !ok || out["via"] != "cli" || out["all_ok"] != false || !strings.Contains(j, `"file":"res://bad.gd","function":"GDScript::reload","kind":"script","line":4`) ||
+		!strings.Contains(j, `{"ok":true,"path":"res://good.gd"}`) || !strings.Contains(j, `"path":"res://missing.gd"`) {
+		t.Errorf("cli check_script: %s", j)
+	}
 }

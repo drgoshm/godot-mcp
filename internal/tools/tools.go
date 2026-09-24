@@ -9,6 +9,7 @@ import (
 
 	"github.com/drgoshm/godot-mcp/internal/docs"
 	"github.com/drgoshm/godot-mcp/internal/godot"
+	"github.com/drgoshm/godot-mcp/internal/lsp"
 	"github.com/drgoshm/godot-mcp/internal/project"
 )
 
@@ -19,6 +20,7 @@ type Deps struct {
 	Runner  *godot.Runner
 	Version string       // версия движка, для project_info
 	Docs    *docs.Loader // справка по API; по умолчанию кеш в каталоге пользователя
+	LSP     *lsp.Checker // фоновый редактор для check_script; nil — только --check-only
 }
 
 // Register добавляет все инструменты на сервер.

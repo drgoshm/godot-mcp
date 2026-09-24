@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/drgoshm/godot-mcp/internal/godot"
+	"github.com/drgoshm/godot-mcp/internal/lsp"
 	"github.com/drgoshm/godot-mcp/internal/project"
 	"github.com/drgoshm/godot-mcp/internal/tools"
 )
@@ -27,6 +28,8 @@ var version = "0.1.0"
 func main() {
 	projectDir := flag.String("project", os.Getenv("GODOT_PROJECT"), "path to the Godot project (directory with project.godot)")
 	godotBin := flag.String("godot", "", "path to the Godot 4 binary (default: $GODOT_BIN, PATH, standard locations)")
+	lspMode := flag.String("lsp", envOr("GODOT_MCP_LSP", "on"),
+		"on: check scripts through a background headless editor's language server; off: only godot --check-only")
 	flag.Parse()
 
 	// stdout занят протоколом MCP — все логи только в stderr.
@@ -34,12 +37,22 @@ func main() {
 	log.SetPrefix("godot-mcp: ")
 	log.SetFlags(0)
 
-	if err := run(*projectDir, *godotBin); err != nil {
+	if *lspMode != "on" && *lspMode != "off" {
+		log.Fatalf("--lsp must be on or off, got %q", *lspMode)
+	}
+	if err := run(*projectDir, *godotBin, *lspMode == "on"); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(projectDir, godotBin string) error {
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func run(projectDir, godotBin string, useLSP bool) error {
 	if projectDir == "" {
 		return fmt.Errorf("--project is required (or set GODOT_PROJECT)")
 	}
@@ -80,7 +93,13 @@ func run(projectDir, godotBin string) error {
 			"Check engine APIs with godot_class_docs instead of relying on memory: many names changed since Godot 3. " +
 			"Create scenes with godot_create_scene and change them with godot_scene_tree + godot_edit_scene instead of hand-editing .tscn.",
 	})
-	tools.Register(server, &tools.Deps{Sandbox: sb, Godot: g, Runner: runner, Version: ver})
+	deps := &tools.Deps{Sandbox: sb, Godot: g, Runner: runner, Version: ver}
+	if useLSP {
+		// Редактор стартует при первой проверке скрипта и сам останавливается в простое.
+		deps.LSP = &lsp.Checker{Bin: bin, ProjectDir: sb.Root()}
+		defer deps.LSP.Close()
+	}
+	tools.Register(server, deps)
 
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
 		return err

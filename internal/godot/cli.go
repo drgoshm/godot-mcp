@@ -184,3 +184,13 @@ func truncate(s string, n int) string {
 	}
 	return s[:n/2] + "\n... [output truncated] ...\n" + s[len(s)-n/2:]
 }
+
+// StartGroup и KillGroup — для долгоживущих процессов движка вне Runner
+// (фоновый редактор для LSP): своя группа процессов и остановка всего дерева.
+func StartGroup(cmd *exec.Cmd) error {
+	setProcessGroup(cmd)
+	return cmd.Start()
+}
+
+// KillGroup шлёт SIGTERM (или SIGKILL при force) группе процессов cmd.
+func KillGroup(cmd *exec.Cmd, force bool) error { return killGroup(cmd, force) }
