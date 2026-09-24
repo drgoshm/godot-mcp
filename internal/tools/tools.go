@@ -25,6 +25,7 @@ func Register(s *mcp.Server, d *Deps) {
 	registerEngineTools(s, d)
 	registerSceneTools(s, d)
 	registerScreenshotTools(s, d)
+	registerTestTools(s, d)
 	registerRunTools(s, d)
 }
 

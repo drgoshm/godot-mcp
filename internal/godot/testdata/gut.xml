@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="GutTests" failures="2" tests="4" >
+  <testsuite name="test/unit/test_calc.gd" tests="4" failures="2" skipped="1" time="0.000267" >
+      <testcase name="test_passes" assertions="1" status="pass" classname="test/unit/test_calc.gd" time="0.000066" >
+      </testcase>
+      <testcase name="test_fails" assertions="1" status="fail" classname="test/unit/test_calc.gd" time="0.00007" >
+      <failure message="failed"><![CDATA[[4] expected to equal [5]:  math is hard
+            at line 7]]></failure></testcase>
+      <testcase name="test_crashes" assertions="1" status="fail" classname="test/unit/test_calc.gd" time="0.0001" >
+      <failure message="failed"><![CDATA[Unexpected Errors:
+      [1] <engine-2>Invalid call. Nonexistent function 'boom' in base 'Nil'.
+            at line -1]]></failure></testcase>
+      <testcase name="test_pending" assertions="0" status="pending" classname="test/unit/test_calc.gd" time="0.000031" >
+      <skipped message="pending"><![CDATA[later]]></skipped></testcase>
+  </testsuite>
+</testsuites>

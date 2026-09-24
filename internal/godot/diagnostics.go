@@ -69,7 +69,6 @@ func ParseDiagnostics(lines []string) []Diagnostic {
 
 	emit := func() {
 		if cur != nil && !isNoise(cur.Message) {
-			locateInScript(cur)
 			out = append(out, *cur)
 		}
 		cur, inBacktrace = nil, false
@@ -112,11 +111,14 @@ func ParseDiagnostics(lines []string) []Diagnostic {
 	emit()
 
 	// "Failed to load script ... Parse error" дублирует SCRIPT ERROR выше.
+	// Место в скрипте ищем уже после: у этого дубля верхний кадр backtrace —
+	// код загрузчика, а не сломанный файл.
 	filtered := out[:0]
 	for _, d := range out {
 		if d.Kind == "engine" && strings.HasPrefix(d.Message, "Failed to load script") && hasScriptError(out) {
 			continue
 		}
+		locateInScript(&d)
 		filtered = append(filtered, d)
 	}
 	return filtered

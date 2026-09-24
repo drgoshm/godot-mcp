@@ -59,7 +59,18 @@ jobs:
           mv ~/godot/Godot_v*_linux.x86_64 ~/godot/godot
           chmod +x ~/godot/godot
       - run: ~/godot/godot --headless --version
+      # Тестовые фреймворки для godot_run_tests — те же версии, что в testdata.
+      - name: Download GUT and gdUnit4
+        run: |
+          mkdir -p ~/testaddons
+          curl -fsSL https://codeload.github.com/bitwes/Gut/zip/refs/tags/v9.7.1 -o /tmp/gut.zip
+          curl -fsSL https://codeload.github.com/godot-gdunit-labs/gdUnit4/zip/refs/tags/v6.2.1 -o /tmp/gdunit4.zip
+          unzip -q /tmp/gut.zip -d ~/testaddons
+          unzip -q /tmp/gdunit4.zip -d ~/testaddons
       - name: Integration tests
+        env:
+          GUT_ADDON_DIR: /home/runner/testaddons/Gut-9.7.1/addons/gut
+          GDUNIT4_ADDON_DIR: /home/runner/testaddons/gdUnit4-6.2.1/addons/gdUnit4
         run: GODOT_BIN="$HOME/godot/godot" go test -race -v ./...
 
   # Скриншоты требуют настоящего рендера: виртуальный дисплей (Xvfb) и
