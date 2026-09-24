@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/drgoshm/godot-mcp/internal/docs"
 	"github.com/drgoshm/godot-mcp/internal/godot"
 	"github.com/drgoshm/godot-mcp/internal/project"
 )
@@ -97,7 +98,9 @@ func newSession(t *testing.T, name string) (callFunc, string, *mcp.ClientSession
 	t.Cleanup(func() { runner.StopAll(context.Background()) })
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-test", Version: "test"}, nil)
-	Register(server, &Deps{Sandbox: sb, Godot: g, Runner: runner, Version: "test"})
+	// Кеш справки — во временном каталоге теста, а не в каталоге пользователя.
+	Register(server, &Deps{Sandbox: sb, Godot: g, Runner: runner, Version: "test",
+		Docs: &docs.Loader{Bin: bin, Version: "test", CacheDir: t.TempDir()}})
 
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()

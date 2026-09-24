@@ -77,6 +77,7 @@ func run(projectDir, godotBin string) error {
 		Instructions: "Tools for a Godot 4 project. Paths are res:// paths. Typical loop: godot_project_info -> " +
 			"read/edit files -> godot_check_script -> godot_run_project (quit_after for a smoke test) -> godot_get_output; " +
 			"use godot_screenshot to see what the game looks like and godot_run_tests for GUT/gdUnit4 tests. " +
+			"Check engine APIs with godot_class_docs instead of relying on memory: many names changed since Godot 3. " +
 			"Create scenes with godot_create_scene and change them with godot_scene_tree + godot_edit_scene instead of hand-editing .tscn.",
 	})
 	tools.Register(server, &tools.Deps{Sandbox: sb, Godot: g, Runner: runner, Version: ver})
