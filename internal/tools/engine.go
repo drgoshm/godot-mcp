@@ -14,8 +14,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"godot-mcp/internal/godot"
-	"godot-mcp/internal/project"
+	"github.com/drgoshm/godot-mcp/internal/godot"
+	"github.com/drgoshm/godot-mcp/internal/project"
 )
 
 //go:embed gdscript/scene_builder.gd

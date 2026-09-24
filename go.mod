@@ -1,4 +1,4 @@
-module godot-mcp
+module github.com/drgoshm/godot-mcp
 
 go 1.25.0
 

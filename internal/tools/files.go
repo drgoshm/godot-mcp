@@ -7,7 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"godot-mcp/internal/project"
+	"github.com/drgoshm/godot-mcp/internal/project"
 )
 
 // ---- godot_list_files ----

@@ -17,9 +17,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"godot-mcp/internal/godot"
-	"godot-mcp/internal/project"
-	"godot-mcp/internal/tools"
+	"github.com/drgoshm/godot-mcp/internal/godot"
+	"github.com/drgoshm/godot-mcp/internal/project"
+	"github.com/drgoshm/godot-mcp/internal/tools"
 )
 
 var version = "0.1.0"
