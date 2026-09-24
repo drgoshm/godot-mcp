@@ -18,7 +18,7 @@ import (
 // Сквозной тест через настоящий MCP-протокол (in-memory транспорт).
 // Движковые шаги выполняются только с GODOT_BIN.
 func TestEndToEnd(t *testing.T) {
-	call, _ := newSession(t, "E2E")
+	call, _, _ := newSession(t, "E2E")
 
 	// Скрипт с ошибкой -> check_script находит строку -> правим -> проходит.
 	if _, ok := call("godot_write_file", map[string]any{
@@ -80,7 +80,7 @@ type callFunc func(name string, args map[string]any) (map[string]any, bool)
 
 // newSession поднимает сервер на свежем проекте и подключает к нему клиента
 // через in-memory транспорт. Без GODOT_BIN тест пропускается.
-func newSession(t *testing.T, name string) (callFunc, string) {
+func newSession(t *testing.T, name string) (callFunc, string, *mcp.ClientSession) {
 	t.Helper()
 	bin := os.Getenv("GODOT_BIN")
 	if bin == "" {
@@ -127,13 +127,13 @@ func newSession(t *testing.T, name string) (callFunc, string) {
 		must(t, json.Unmarshal(raw, &out))
 		return out, true
 	}
-	return call, dir
+	return call, dir, cs
 }
 
 // Встроенные подресурсы: {"_type": ...} в свойствах узла сохраняются
 // в .tscn как sub_resource, в том числе вложенные и пользовательские.
 func TestCreateSceneSubResources(t *testing.T) {
-	call, dir := newSession(t, "SubRes")
+	call, dir, _ := newSession(t, "SubRes")
 
 	write := func(path, content string) {
 		t.Helper()
@@ -240,7 +240,7 @@ func _init() -> void:
 // scene_builder.gd выполняется с настройками проекта. Если там все
 // предупреждения GDScript превращены в ошибки, сборка сцены не должна ломаться.
 func TestCreateSceneStrictWarnings(t *testing.T) {
-	call, dir := newSession(t, "Strict")
+	call, dir, _ := newSession(t, "Strict")
 
 	// Список предупреждений берём у движка, чтобы тест следил за новыми версиями.
 	out, ok := call("godot_run_script", map[string]any{"code": `extends SceneTree
@@ -285,7 +285,7 @@ func _init() -> void:
 // Соединения сигналов сохраняются в .tscn и срабатывают после загрузки;
 // ошибки в них ловятся при сборке, а не при срабатывании сигнала.
 func TestCreateSceneConnections(t *testing.T) {
-	call, dir := newSession(t, "Signals")
+	call, dir, _ := newSession(t, "Signals")
 	if out, ok := call("godot_write_file", map[string]any{"path": "res://menu.gd", "content": `extends Control
 
 func _on_start_pressed() -> void:
@@ -384,7 +384,7 @@ func _process(_delta: float) -> bool:
 // godot_scene_tree возвращает сцену в формате godot_create_scene (с круговой
 // проверкой), а godot_edit_scene правит её атомарно, сохраняя UID.
 func TestSceneTreeAndEdit(t *testing.T) {
-	call, dir := newSession(t, "Edit")
+	call, dir, _ := newSession(t, "Edit")
 	mustCall := func(name string, args map[string]any) map[string]any {
 		t.Helper()
 		out, ok := call(name, args)

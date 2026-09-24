@@ -61,3 +61,34 @@ jobs:
       - run: ~/godot/godot --headless --version
       - name: Integration tests
         run: GODOT_BIN="$HOME/godot/godot" go test -race -v ./...
+
+  # Скриншоты требуют настоящего рендера: виртуальный дисплей (Xvfb) и
+  # программный Vulkan (lavapipe из mesa-vulkan-drivers). Отдельная задача,
+  # чтобы проблемы окружения не маскировали остальные тесты.
+  screenshots:
+    name: screenshots (Godot 4.6.3, Xvfb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Xvfb and software Vulkan
+        run: sudo apt-get update && sudo apt-get install -y xvfb mesa-vulkan-drivers
+      - name: Cache Godot
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-4.6.3-linux-x86_64
+      - name: Download Godot
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot
+          curl -fsSL -o /tmp/godot.zip \
+            "https://github.com/godotengine/godot/releases/download/4.6.3-stable/Godot_v4.6.3-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot
+          mv ~/godot/Godot_v*_linux.x86_64 ~/godot/godot
+          chmod +x ~/godot/godot
+      - name: Screenshot tests
+        run: GODOT_BIN="$HOME/godot/godot" xvfb-run -a go test -v -run TestScreenshot ./internal/tools/

@@ -31,8 +31,10 @@ type Diagnostic struct {
 var (
 	ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 	// "at: _ready (res://player.gd:6)" / "at: load (core/io/resource_loader.cpp:317)"
-	atRe    = regexp.MustCompile(`^at:\s*(.*?)\s*\((.+):(\d+)\)\s*$`)
-	frameRe = regexp.MustCompile(`^\[\d+\]\s+`)
+	atRe = regexp.MustCompile(`^at:\s*(.*?)\s*\((.+):(\d+)\)\s*$`)
+	// "_ready (res://main.gd:7)" — кадр GDScript backtrace
+	frameLocRe = regexp.MustCompile(`^(.*?)\s*\((res://.+):(\d+)\)\s*$`)
+	frameRe    = regexp.MustCompile(`^\[\d+\]\s+`)
 )
 
 type header struct{ prefix, severity, kind string }
@@ -67,6 +69,7 @@ func ParseDiagnostics(lines []string) []Diagnostic {
 
 	emit := func() {
 		if cur != nil && !isNoise(cur.Message) {
+			locateInScript(cur)
 			out = append(out, *cur)
 		}
 		cur, inBacktrace = nil, false
@@ -117,6 +120,21 @@ func ParseDiagnostics(lines []string) []Diagnostic {
 		filtered = append(filtered, d)
 	}
 	return filtered
+}
+
+// locateInScript: push_error() и ошибки движка, вызванные из скрипта, указывают
+// в "at:" на C++-исходник, а место в коде игры есть только в backtrace.
+// Берём верхний кадр — оттуда ошибку и вызвали.
+func locateInScript(d *Diagnostic) {
+	if d.File != "" || len(d.Backtrace) == 0 {
+		return
+	}
+	m := frameLocRe.FindStringSubmatch(d.Backtrace[0])
+	if m == nil {
+		return
+	}
+	n, _ := strconv.Atoi(m[3])
+	d.File, d.Line, d.Function, d.Kind = m[2], n, m[1], "script"
 }
 
 func matchHeader(line string) (header, bool) {
