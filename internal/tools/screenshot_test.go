@@ -51,6 +51,19 @@ func TestLoadPNGScales(t *testing.T) {
 }
 
 // Настоящий Movie Maker: нужен Godot и дисплей (окно открывается на ~1 с).
+func hasOrange(img image.Image) bool {
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y += 4 {
+		for x := b.Min.X; x < b.Max.X; x += 4 {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			if r>>8 > 200 && g>>8 > 100 && g>>8 < 160 && bl>>8 < 50 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestScreenshot(t *testing.T) {
 	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {
 		t.Skip("no display; run under xvfb-run")
@@ -113,6 +126,28 @@ func TestScreenshot(t *testing.T) {
 	out, ok := call("godot_screenshot", map[string]any{"frames": []int{5, 120}, "args": []string{"--quit"}})
 	if !ok || !strings.Contains(mustJSON(out), `"missing":[120]`) || !strings.Contains(mustJSON(out), `"frame":5`) {
 		t.Errorf("early quit: %v", out)
+	}
+
+	// Снимок живой игры через мост: круг едет, кадр берётся «сейчас».
+	out, ok = call("godot_run_project", map[string]any{"wait_seconds": 1})
+	if !ok {
+		t.Fatalf("run_project: %v", out)
+	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "godot_game_screenshot", Arguments: map[string]any{}})
+	must(t, err)
+	call("godot_stop_project", nil)
+	var live image.Image
+	for _, c := range res.Content {
+		if ic, ok := c.(*mcp.ImageContent); ok {
+			live, err = png.Decode(bytes.NewReader(ic.Data))
+			must(t, err)
+		}
+	}
+	if res.IsError || live == nil || live.Bounds().Dx() != 320 {
+		t.Fatalf("live screenshot: %s", mustJSON(res.Content))
+	}
+	if isOrange(live.At(5, 5)) || !hasOrange(live) {
+		t.Errorf("live screenshot should show the background and the circle")
 	}
 
 	for _, bad := range []map[string]any{

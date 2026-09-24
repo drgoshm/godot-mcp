@@ -22,6 +22,7 @@ type RunProjectIn struct {
 	Debug       bool     `json:"debug,omitempty" jsonschema:"show collision shapes and navigation meshes"`
 	Args        []string `json:"args,omitempty" jsonschema:"user arguments passed after --, readable via OS.get_cmdline_user_args()"`
 	WaitSeconds int      `json:"wait_seconds,omitempty" jsonschema:"collect startup output for this long before returning (default 3, max 60)"`
+	NoBridge    bool     `json:"no_bridge,omitempty" jsonschema:"do not connect the bridge used by godot_game_* tools"`
 }
 
 // ---- godot_get_output ----
@@ -57,7 +58,9 @@ func registerRunTools(s *mcp.Server, d *Deps) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "godot_run_project",
 		Description: "Start the game (or one scene) in the background and return its run_id plus the first seconds of output " +
-			"and parsed runtime errors. Keep reading with godot_get_output; stop with godot_stop_project.",
+			"and parsed runtime errors. Keep reading with godot_get_output; stop with godot_stop_project. " +
+			"While it runs, inspect and drive it with godot_game_tree, godot_game_eval, godot_game_set, godot_game_input " +
+			"and godot_game_screenshot (a temporary autoload bridge is added via override.cfg; no_bridge turns it off).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in RunProjectIn) (*mcp.CallToolResult, RunOutput, error) {
 		scene, err := resolveScene(d, in.Scene)
 		if err != nil {
@@ -65,6 +68,7 @@ func registerRunTools(s *mcp.Server, d *Deps) {
 		}
 		run, err := d.Runner.Start(godot.StartOptions{
 			Scene: scene, Headless: in.Headless, QuitAfter: in.QuitAfter, Debug: in.Debug, UserArgs: in.Args,
+			Bridge: !in.NoBridge,
 		})
 		if err != nil {
 			return nil, RunOutput{}, err

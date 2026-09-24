@@ -283,6 +283,18 @@ func _init() -> void:
 	if !ok || out["nodes"] != float64(2) {
 		t.Fatalf("create_scene with %d warnings as errors: %v", n, out)
 	}
+
+	// Мост тоже выполняется с настройками проекта — как автозагрузка игры.
+	out, ok = call("godot_run_project", map[string]any{"scene": "res://strict.tscn", "headless": true, "wait_seconds": 1})
+	if !ok {
+		t.Fatalf("run_project: %v", out)
+	}
+	defer call("godot_stop_project", nil)
+	out, ok = call("godot_game_eval", map[string]any{"expression": "get_child_count() + 1"})
+	if !ok || out["value"] != float64(2) {
+		logs, _ := call("godot_get_output", nil)
+		t.Fatalf("bridge with %d warnings as errors: %v\n%s", n, out, mustJSON(logs))
+	}
 }
 
 // Соединения сигналов сохраняются в .tscn и срабатывают после загрузки;

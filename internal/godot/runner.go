@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -36,8 +37,9 @@ type Run struct {
 	Args      []string
 	StartedAt time.Time
 
-	cmd  *exec.Cmd
-	done chan struct{}
+	cmd    *exec.Cmd
+	done   chan struct{}
+	Bridge *Bridge // nil, если игра запущена без моста
 
 	mu       sync.Mutex
 	lines    []Line // кольцевой буфер фиксированного размера
@@ -56,19 +58,23 @@ type RunState struct {
 	Error     string `json:"error,omitempty"`
 	StartedAt string `json:"started_at"`
 	Uptime    string `json:"uptime"`
+	Bridge    string `json:"bridge,omitempty"` // connected | waiting | closed
 }
 
 // Runner управляет запусками проекта.
 type Runner struct {
-	g     *Godot
-	seq   atomic.Int64
-	mu    sync.Mutex
-	runs  map[string]*Run
-	order []string
+	g        *Godot
+	seq      atomic.Int64
+	mu       sync.Mutex
+	runs     map[string]*Run
+	order    []string
+	override *overrideCfg
 }
 
 func NewRunner(g *Godot) *Runner {
-	return &Runner{g: g, runs: map[string]*Run{}}
+	o := &overrideCfg{dir: g.ProjectDir}
+	o.cleanupStale()
+	return &Runner{g: g, runs: map[string]*Run{}, override: o}
 }
 
 // StartOptions — параметры запуска.
@@ -78,6 +84,7 @@ type StartOptions struct {
 	QuitAfter int      // выйти через N кадров (для смоук-тестов); 0 = не выходить
 	Debug     bool     // --debug-collisions, --debug-navigation
 	UserArgs  []string // аргументы игры после "--"
+	Bridge    bool     // подключить мост для godot_game_* (автозагрузка через override.cfg)
 }
 
 // Start запускает проект и сразу возвращает управление.
@@ -102,16 +109,37 @@ func (r *Runner) Start(opt StartOptions) (*Run, error) {
 	cmd := exec.Command(r.g.Bin, args...)
 	cmd.Dir = r.g.ProjectDir
 	setProcessGroup(cmd)
+
+	var bridge *Bridge
+	if opt.Bridge {
+		b, err := newBridge()
+		if err != nil {
+			return nil, err
+		}
+		if err := r.override.acquire(); err != nil {
+			b.Close()
+			return nil, fmt.Errorf("cannot set up the bridge: %w", err)
+		}
+		bridge = b
+		cmd.Env = append(os.Environ(), b.Env())
+	}
+	fail := func(err error) (*Run, error) {
+		if bridge != nil {
+			bridge.Close()
+			r.override.release()
+		}
+		return nil, err
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start godot: %w", err)
+		return fail(fmt.Errorf("failed to start godot: %w", err))
 	}
 
 	run := &Run{
@@ -121,6 +149,19 @@ func (r *Runner) Start(opt StartOptions) (*Run, error) {
 		StartedAt: time.Now(),
 		cmd:       cmd,
 		done:      make(chan struct{}),
+		Bridge:    bridge,
+	}
+	if bridge != nil {
+		// override.cfg нужен только на старте: как только игра подключилась
+		// (или вышла, или так и не подключилась), возвращаем файл как был.
+		go func() {
+			select {
+			case <-bridge.Connected():
+			case <-run.done:
+			case <-time.After(30 * time.Second):
+			}
+			r.override.release()
+		}()
 	}
 
 	// Пайпы нужно вычитывать постоянно: если буфер пайпа переполнится,
@@ -143,6 +184,9 @@ func (r *Runner) Start(opt StartOptions) (*Run, error) {
 		}
 		run.mu.Unlock()
 		close(run.done)
+		if bridge != nil {
+			bridge.Close()
+		}
 	}()
 
 	r.mu.Lock()
@@ -228,6 +272,16 @@ func (run *Run) State() RunState {
 		s.Status, s.ExitCode, s.Error, end = RunStatusDone, &code, run.exitErr, run.endedAt
 	}
 	s.Uptime = end.Sub(run.StartedAt).Round(time.Millisecond).String()
+	if run.Bridge != nil {
+		switch {
+		case run.Bridge.IsConnected():
+			s.Bridge = "connected"
+		case s.Status == RunStatusAlive:
+			s.Bridge = "waiting"
+		default:
+			s.Bridge = "closed"
+		}
+	}
 	return s
 }
 
@@ -308,6 +362,7 @@ func (r *Runner) StopAll(ctx context.Context) {
 			_, _ = r.Stop(ctx, s.ID)
 		}
 	}
+	r.override.forceRestore()
 }
 
 // Diagnostics для строк запуска.

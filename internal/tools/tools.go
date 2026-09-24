@@ -32,6 +32,7 @@ func Register(s *mcp.Server, d *Deps) {
 	registerScreenshotTools(s, d)
 	registerTestTools(s, d)
 	registerDocsTools(s, d)
+	registerGameTools(s, d)
 	registerRunTools(s, d)
 }
 

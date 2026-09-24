@@ -15,6 +15,11 @@ func loadPNG(path string, maxWidth int) (data []byte, width, height int, err err
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	return scalePNG(raw, maxWidth)
+}
+
+// scalePNG — то же для PNG в памяти (кадр, присланный игрой через мост).
+func scalePNG(raw []byte, maxWidth int) (data []byte, width, height int, err error) {
 	img, err := png.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return nil, 0, 0, err
