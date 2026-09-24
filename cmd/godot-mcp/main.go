@@ -91,6 +91,7 @@ func run(projectDir, godotBin string, useLSP bool) error {
 			"read/edit files -> godot_check_script -> godot_run_project (quit_after for a smoke test) -> godot_get_output; " +
 			"use godot_screenshot to see what the game looks like and godot_run_tests for GUT/gdUnit4 tests. " +
 			"Check engine APIs with godot_class_docs instead of relying on memory: many names changed since Godot 3. " +
+			"Navigate project code with godot_find_symbol and godot_symbol_info (definition, usages) before changing a function. " +
 			"Create scenes with godot_create_scene and change them with godot_scene_tree + godot_edit_scene instead of hand-editing .tscn.",
 	})
 	deps := &tools.Deps{Sandbox: sb, Godot: g, Runner: runner, Version: ver}

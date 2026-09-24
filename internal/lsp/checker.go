@@ -98,7 +98,7 @@ func (c *Checker) Check(ctx context.Context, resPaths []string) (map[string][]go
 	}
 	var waits []pending
 	for _, res := range resPaths {
-		abs := filepath.Join(ed.root, filepath.FromSlash(strings.TrimPrefix(res, "res://")))
+		abs := ed.abs(res)
 		text, err := os.ReadFile(abs)
 		if err != nil {
 			return nil, err
@@ -128,6 +128,76 @@ func (c *Checker) Check(ctx context.Context, resPaths []string) (map[string][]go
 		}
 	}
 	return out, nil
+}
+
+// Query выполняет запрос языкового сервера к документу resPath (hover,
+// definition, references, documentSymbol...). Перед запросом документ и
+// изменённые на диске скрипты синхронизируются, как при проверке.
+// В params поле textDocument заполняется автоматически.
+func (c *Checker) Query(ctx context.Context, resPath, method string, params map[string]any) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.QueryEach(ctx, []string{resPath}, method, params, func(_ string, res json.RawMessage) { out = res })
+	return out, err
+}
+
+// QueryEach — тот же запрос к нескольким документам с одной синхронизацией
+// (поиск символов по всему проекту). fn вызывается для каждого документа.
+func (c *Checker) QueryEach(ctx context.Context, resPaths []string, method string, params map[string]any, fn func(resPath string, result json.RawMessage)) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+	c.touch()
+	ed := c.ed
+	if err := ed.syncFiles(); err != nil {
+		return err
+	}
+	for _, res := range resPaths {
+		abs := ed.abs(res)
+		text, err := os.ReadFile(abs)
+		if err != nil {
+			return err
+		}
+		uri := fileURI(abs)
+		if err := ed.update(uri, string(text)); err != nil {
+			return err
+		}
+		p := map[string]any{"textDocument": map[string]any{"uri": uri}}
+		for k, v := range params {
+			p[k] = v
+		}
+		qctx, cancel := context.WithTimeout(ctx, diagnosticsWait)
+		result, err := ed.cl.Request(method, p, qctx.Done())
+		cancel()
+		if err != nil {
+			return fmt.Errorf("%s %s: %w", method, res, err)
+		}
+		fn(res, result)
+	}
+	return nil
+}
+
+// ResPath переводит URI из ответа языкового сервера в res://-путь; "" если он вне проекта.
+func (c *Checker) ResPath(uri string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ed == nil {
+		return ""
+	}
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme != "file" {
+		return ""
+	}
+	p := filepath.FromSlash(u.Path)
+	if len(p) > 2 && p[0] == filepath.Separator && p[2] == ':' { // /C:/x -> C:/x
+		p = p[1:]
+	}
+	rel, err := filepath.Rel(c.ed.root, p)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	return "res://" + filepath.ToSlash(rel)
 }
 
 // Close останавливает фоновый редактор.
@@ -208,7 +278,9 @@ func (c *Checker) start(ctx context.Context) (*editor, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(c.Bin, "--editor", "--headless", "--path", root, "--lsp-port", strconv.Itoa(port))
+	// --language en: описания движка в подсказках — на английском, как и остальная справка,
+	// а не на языке, выбранном в настройках редактора пользователя.
+	cmd := exec.Command(c.Bin, "--editor", "--headless", "--language", "en", "--path", root, "--lsp-port", strconv.Itoa(port))
 	cmd.Dir = root
 	out := &tailBuffer{max: 4096}
 	cmd.Stdout, cmd.Stderr = out, out
@@ -270,6 +342,10 @@ func (c *Checker) start(ctx context.Context) (*editor, error) {
 	return ed, nil
 }
 
+func (ed *editor) abs(res string) string {
+	return filepath.Join(ed.root, filepath.FromSlash(strings.TrimPrefix(res, "res://")))
+}
+
 func (ed *editor) alive() bool {
 	select {
 	case <-ed.done:
@@ -304,10 +380,18 @@ func (ed *editor) syncFiles() error {
 		}
 		// didSave с текстом перечитывает скрипт в кеше редактора — зависимые
 		// файлы увидят новые типы и сигнатуры.
+		uri := fileURI(path)
 		if err := ed.cl.Notify("textDocument/didSave", map[string]any{
-			"textDocument": map[string]any{"uri": fileURI(path)}, "text": string(text),
+			"textDocument": map[string]any{"uri": uri}, "text": string(text),
 		}); err != nil {
 			return err
+		}
+		// Открытый документ живёт своим текстом: didSave его не меняет, и
+		// переход к определению показывал бы старые строки.
+		if ed.versions[uri] > 0 {
+			if err := ed.update(uri, string(text)); err != nil {
+				return err
+			}
 		}
 	}
 	ed.files, ed.classByFile = files, classes
