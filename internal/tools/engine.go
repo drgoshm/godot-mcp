@@ -64,15 +64,27 @@ type RunScriptIn struct {
 // ---- godot_create_scene ----
 
 type CreateSceneIn struct {
-	Path      string         `json:"path" jsonschema:"res:// path of the scene to create, ending in .tscn"`
-	Root      map[string]any `json:"root" jsonschema:"root node spec: {type or scene, name, script?, properties?, groups?, children?[]}; children use the same shape"`
-	Overwrite bool           `json:"overwrite,omitempty" jsonschema:"replace the scene if it already exists"`
+	Path        string         `json:"path" jsonschema:"res:// path of the scene to create, ending in .tscn"`
+	Root        map[string]any `json:"root" jsonschema:"root node spec: {type or scene, name, script?, properties?, groups?, children?[]}; children use the same shape"`
+	Connections []Connection   `json:"connections,omitempty" jsonschema:"signal connections saved in the scene"`
+	Overwrite   bool           `json:"overwrite,omitempty" jsonschema:"replace the scene if it already exists"`
+}
+
+// Connection — соединение сигнала, как [connection] в .tscn.
+type Connection struct {
+	From   string `json:"from" jsonschema:"emitting node path relative to the scene root; \".\" is the root"`
+	Signal string `json:"signal" jsonschema:"signal name, e.g. pressed or body_entered"`
+	To     string `json:"to" jsonschema:"receiving node path relative to the scene root; \".\" is the root"`
+	Method string `json:"method" jsonschema:"method on the receiver; it must already exist in its script"`
+	Binds  []any  `json:"binds,omitempty" jsonschema:"extra arguments appended after the signal's own"`
+	Flags  int    `json:"flags,omitempty" jsonschema:"CONNECT_* flags: 1 deferred, 4 one-shot, 8 reference-counted"`
 }
 
 type CreateSceneOut struct {
-	Path  string `json:"path"`
-	UID   string `json:"uid,omitempty"`
-	Nodes int    `json:"nodes"`
+	Path        string `json:"path"`
+	UID         string `json:"uid,omitempty"`
+	Nodes       int    `json:"nodes"`
+	Connections int    `json:"connections,omitempty"`
 }
 
 const createSceneDescription = `Build a scene from a node tree and save it through Godot itself, so UIDs, ext_resources and owners are correct.
@@ -86,7 +98,9 @@ Resource properties take a res:// path or an embedded resource object saved insi
   "shape": {"_type": "RectangleShape2D", "size": "Vector2(32, 48)"}
   "texture": {"_type": "GradientTexture2D", "gradient": {"_type": "Gradient", "colors": "PackedColorArray(1,0,0,1, 0,0,1,1)"}}
 Other keys of the object are the resource's properties (same rules, nesting allowed). "_type" may be a class_name
-(run godot_import after creating it) or pass "_script": "res://item.gd". Arrays such as Array[ItemData] take lists of these.`
+(run godot_import after creating it) or pass "_script": "res://item.gd". Arrays such as Array[ItemData] take lists of these.
+Connect signals with "connections": [{"from": "UI/Start", "signal": "pressed", "to": ".", "method": "_on_start_pressed"}];
+paths are relative to the root. The method must already exist in the receiver's script and accept the signal's arguments.`
 
 func registerEngineTools(s *mcp.Server, d *Deps) {
 	mcp.AddTool(s, &mcp.Tool{
@@ -205,7 +219,7 @@ func createScene(ctx context.Context, d *Deps, in CreateSceneIn) (*mcp.CallToolR
 		return nil, zero, errors.New("root is required")
 	}
 
-	spec, err := json.Marshal(map[string]any{"path": d.Sandbox.ToRes(abs), "root": in.Root})
+	spec, err := json.Marshal(map[string]any{"path": d.Sandbox.ToRes(abs), "root": in.Root, "connections": in.Connections})
 	if err != nil {
 		return nil, zero, err
 	}
@@ -225,11 +239,12 @@ func createScene(ctx context.Context, d *Deps, in CreateSceneIn) (*mcp.CallToolR
 		return nil, zero, err
 	}
 	var payload struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-		Path  string `json:"path"`
-		UID   string `json:"uid"`
-		Nodes int    `json:"nodes"`
+		OK          bool   `json:"ok"`
+		Error       string `json:"error"`
+		Path        string `json:"path"`
+		UID         string `json:"uid"`
+		Nodes       int    `json:"nodes"`
+		Connections int    `json:"connections"`
 	}
 	if !findResult(res.Output, &payload) {
 		return nil, zero, fmt.Errorf("scene builder produced no result (exit %d):\n%s", res.ExitCode, res.Output)
@@ -237,7 +252,7 @@ func createScene(ctx context.Context, d *Deps, in CreateSceneIn) (*mcp.CallToolR
 	if !payload.OK {
 		return nil, zero, errors.New("scene not created: " + payload.Error)
 	}
-	return nil, CreateSceneOut{Path: payload.Path, UID: payload.UID, Nodes: payload.Nodes}, nil
+	return nil, CreateSceneOut{Path: payload.Path, UID: payload.UID, Nodes: payload.Nodes, Connections: payload.Connections}, nil
 }
 
 // findResult ищет строку MCP_RESULT:{...} в выводе служебного скрипта.

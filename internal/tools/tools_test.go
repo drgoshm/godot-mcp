@@ -282,6 +282,105 @@ func _init() -> void:
 	}
 }
 
+// Соединения сигналов сохраняются в .tscn и срабатывают после загрузки;
+// ошибки в них ловятся при сборке, а не при срабатывании сигнала.
+func TestCreateSceneConnections(t *testing.T) {
+	call, dir := newSession(t, "Signals")
+	if out, ok := call("godot_write_file", map[string]any{"path": "res://menu.gd", "content": `extends Control
+
+func _on_start_pressed() -> void:
+	print("START")
+
+func _on_sound_toggled(on: bool) -> void:
+	print("SOUND=", on)
+
+func _on_timeout(tag: String, times: int = 1) -> void:
+	print("TIMEOUT=", tag, ":", times)
+`}); !ok {
+		t.Fatalf("write menu.gd: %v", out)
+	}
+
+	root := map[string]any{"type": "Control", "name": "Menu", "script": "res://menu.gd", "children": []any{
+		map[string]any{"type": "VBoxContainer", "name": "UI", "children": []any{
+			map[string]any{"type": "Button", "name": "Start"},
+			map[string]any{"type": "CheckButton", "name": "Sound"},
+		}},
+		map[string]any{"type": "Timer", "name": "Timer"},
+	}}
+	out, ok := call("godot_create_scene", map[string]any{
+		"path": "res://menu.tscn", "root": root,
+		"connections": []any{
+			map[string]any{"from": "UI/Start", "signal": "pressed", "to": ".", "method": "_on_start_pressed"},
+			map[string]any{"from": "UI/Sound", "signal": "toggled", "to": ".", "method": "_on_sound_toggled"},
+			map[string]any{"from": "Timer", "signal": "timeout", "to": ".", "method": "_on_timeout", "binds": []any{"tick"}, "flags": 1},
+		},
+	})
+	if !ok || out["connections"] != float64(3) {
+		t.Fatalf("create_scene: %v", out)
+	}
+
+	tscn, err := os.ReadFile(filepath.Join(dir, "menu.tscn"))
+	must(t, err)
+	for _, want := range []string{
+		`[connection signal="pressed" from="UI/Start" to="." method="_on_start_pressed"]`,
+		`[connection signal="toggled" from="UI/Sound" to="." method="_on_sound_toggled"]`,
+		`[connection signal="timeout" from="Timer" to="." method="_on_timeout" flags=`,
+		`binds= ["tick"]`,
+	} {
+		if !strings.Contains(string(tscn), want) {
+			t.Errorf("menu.tscn has no %s:\n%s", want, tscn)
+		}
+	}
+
+	// После загрузки сигналы вызывают обработчики. Timer соединён отложенно
+	// (flags=1), поэтому его обработчик срабатывает на следующем кадре.
+	out, ok = call("godot_run_script", map[string]any{"code": `extends SceneTree
+func _init() -> void:
+	var menu: Node = (load("res://menu.tscn") as PackedScene).instantiate()
+	root.add_child(menu)
+	(menu.get_node("UI/Start") as Button).pressed.emit()
+	(menu.get_node("UI/Sound") as CheckButton).toggled.emit(true)
+	(menu.get_node("Timer") as Timer).timeout.emit()
+	print("EMITTED")
+
+func _process(_delta: float) -> bool:
+	return true
+`})
+	text := mustJSON(out)
+	for _, want := range []string{"START", "SOUND=true", "EMITTED", "TIMEOUT=tick:1"} {
+		if !ok || !strings.Contains(text, want) {
+			t.Errorf("run_script output has no %q: %s", want, text)
+		}
+	}
+	if i, j := strings.Index(text, "EMITTED"), strings.Index(text, "TIMEOUT="); i < 0 || j < i {
+		t.Errorf("deferred timeout handler should run after EMITTED: %s", text)
+	}
+
+	bad := []struct {
+		name string
+		conn map[string]any
+		want string
+	}{
+		{"no node", map[string]any{"from": "UI/Quit", "signal": "pressed", "to": ".", "method": "_on_start_pressed"}, "no node at 'UI/Quit'"},
+		{"no signal", map[string]any{"from": "UI/Start", "signal": "clicked", "to": ".", "method": "_on_start_pressed"}, "Button has no signal 'clicked'"},
+		{"no method", map[string]any{"from": "UI/Start", "signal": "pressed", "to": ".", "method": "_on_quit"}, "no method '_on_quit'"},
+		{"too many args", map[string]any{"from": "UI/Sound", "signal": "toggled", "to": ".", "method": "_on_start_pressed"}, "takes 0 arguments, but the signal passes 1 (+0 binds)"},
+		{"too few args", map[string]any{"from": "UI/Start", "signal": "pressed", "to": ".", "method": "_on_timeout"}, "takes 1..2 arguments, but the signal passes 0 (+0 binds)"},
+		{"missing method name", map[string]any{"from": "UI/Start", "signal": "pressed", "to": "."}, "method"},
+	}
+	for _, tc := range bad {
+		out, ok := call("godot_create_scene", map[string]any{
+			"path": "res://bad.tscn", "root": root, "connections": []any{tc.conn},
+		})
+		if ok || !strings.Contains(fmt.Sprint(out["error"]), tc.want) {
+			t.Errorf("%s: want error containing %q, got %v", tc.name, tc.want, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "bad.tscn")); err == nil {
+		t.Error("bad.tscn must not be written when a connection is invalid")
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

@@ -42,7 +42,7 @@ Claude Desktop / Claude Code (`.mcp.json` или `claude_desktop_config.json`):
 | `godot_edit_file` | замена уникального фрагмента (в стиле str_replace) |
 | `godot_check_script` | `--check-only` для одного или нескольких `.gd`, ошибки с файлом и строкой |
 | `godot_import` | headless-импорт ассетов и обновление кеша `class_name` |
-| `godot_create_scene` | сборка `.tscn` из JSON-дерева узлов через `PackedScene` + `ResourceSaver`, со встроенными подресурсами |
+| `godot_create_scene` | сборка `.tscn` из JSON-дерева узлов через `PackedScene` + `ResourceSaver`, со встроенными подресурсами и сигналами |
 | `godot_run_script` | одноразовый GDScript (`extends SceneTree`) внутри проекта |
 | `godot_run_project` | запуск игры или сцены в фоне, возвращает `run_id` и первые секунды вывода |
 | `godot_get_output` | новый вывод по курсору `since`, long-poll, разобранные ошибки |
@@ -60,6 +60,19 @@ Claude Desktop / Claude Code (`.mcp.json` или `claude_desktop_config.json`):
 ```
 
 Остальные ключи объекта — свойства ресурса, по тем же правилам, что и у узлов, поэтому вложенность работает (`GradientTexture2D` → `Gradient`). В `_type` можно указать `class_name` пользовательского ресурса (после `godot_import`) или передать `"_script": "res://item.gd"`. Типизированные массивы вроде `Array[ItemData]` принимают списки таких объектов. Ошибки говорят, что ожидалось: `CollisionShape2D.shape: cannot assign Gradient, the property expects Shape2D`.
+
+### Сигналы
+
+Соединения задаются списком `connections` рядом с `root`, пути узлов — относительно корня сцены (`"."` — сам корень):
+
+```json
+"connections": [
+  {"from": "UI/Start", "signal": "pressed", "to": ".", "method": "_on_start_pressed"},
+  {"from": "Timer", "signal": "timeout", "to": ".", "method": "_on_timeout", "binds": ["tick"], "flags": 1}
+]
+```
+
+Метод должен уже существовать в скрипте получателя. Узлы, сигнал, метод и число аргументов (аргументы сигнала + `binds` против обязательных и необязательных параметров метода) проверяются при сборке. Поэтому ошибка вроде `UI/Sound:toggled -> .:_on_start_pressed: the method takes 0 arguments, but the signal passes 1` приходит сразу, а не во время игры. `flags` — это `CONNECT_*`: 1 — отложенный вызов, 4 — однократный.
 
 ## Безопасность
 

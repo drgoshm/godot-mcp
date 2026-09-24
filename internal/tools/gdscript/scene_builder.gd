@@ -13,6 +13,7 @@ extends SceneTree
 
 var _errors: Array[String] = []
 var _node_count: int = 0
+var _connection_count: int = 0
 
 
 func _init() -> void:
@@ -41,6 +42,15 @@ func _init() -> void:
 	var root_spec: Dictionary = spec["root"]
 
 	var scene_root: Node = _build(root_spec, null, null)
+	if scene_root != null and typeof(spec.get("connections")) == TYPE_ARRAY:
+		var connections: Array = spec["connections"]
+		for i: int in connections.size():
+			var conn: Variant = connections[i]
+			if typeof(conn) != TYPE_DICTIONARY:
+				_errors.append("connections[%d]: expected an object {from, signal, to, method}" % i)
+				continue
+			var conn_spec: Dictionary = conn
+			_connect(scene_root, conn_spec, "connections[%d]" % i)
 	if scene_root == null or not _errors.is_empty():
 		if scene_root != null:
 			scene_root.free()
@@ -73,7 +83,7 @@ func _init() -> void:
 		if ResourceSaver.set_uid(out_path, uid) != OK:
 			uid = ResourceUID.INVALID_ID
 	var uid_text: String = ResourceUID.id_to_text(uid) if uid != ResourceUID.INVALID_ID else ""
-	_finish({"path": out_path, "uid": uid_text, "nodes": _node_count}, "")
+	_finish({"path": out_path, "uid": uid_text, "nodes": _node_count, "connections": _connection_count}, "")
 
 
 ## Рекурсивно создаёт узел по спецификации:
@@ -136,6 +146,72 @@ func _build(node_spec: Dictionary, parent: Node, owner_node: Node) -> Node:
 				var _child: Node = _build(child_spec, node, child_owner)
 
 	return node
+
+
+## Подключает сигнал так, чтобы соединение сохранилось в сцене ([connection] в .tscn):
+## {"from": "UI/Button", "signal": "pressed", "to": ".", "method": "_on_pressed",
+##  "binds": [...], "flags": CONNECT_DEFERRED | CONNECT_ONE_SHOT}.
+## Пути узлов — относительно корня сцены, "." — сам корень. Всё, что Godot
+## проверил бы только при срабатывании сигнала, проверяем сразу.
+func _connect(scene_root: Node, spec: Dictionary, where: String) -> void:
+	var from_path: String = str(spec.get("from", "."))
+	var to_path: String = str(spec.get("to", "."))
+	var signal_name: String = str(spec.get("signal", ""))
+	var method: String = str(spec.get("method", ""))
+	if signal_name.is_empty() or method.is_empty():
+		_errors.append("%s: signal and method are required" % where)
+		return
+
+	var from_node: Node = scene_root.get_node_or_null(NodePath(from_path))
+	var to_node: Node = scene_root.get_node_or_null(NodePath(to_path))
+	if from_node == null or to_node == null:
+		_errors.append("%s: no node at '%s' (paths are relative to the scene root, \".\" is the root)" % [where, from_path if from_node == null else to_path])
+		return
+	var label: String = "%s: %s:%s -> %s:%s" % [where, from_path, signal_name, to_path, method]
+
+	var signal_info: Dictionary = {}
+	for s: Dictionary in from_node.get_signal_list():
+		if s["name"] == signal_name:
+			signal_info = s
+	if signal_info.is_empty():
+		_errors.append("%s: %s has no signal '%s'" % [label, from_node.get_class(), signal_name])
+		return
+
+	# Последнее совпадение: методы скрипта идут после нативных и переопределяют их.
+	var method_info: Dictionary = {}
+	for m: Dictionary in to_node.get_method_list():
+		if m["name"] == method:
+			method_info = m
+	if method_info.is_empty():
+		_errors.append("%s: the target has no method '%s'; add it to the target's script first" % [label, method])
+		return
+
+	var binds: Array = []
+	if typeof(spec.get("binds")) == TYPE_ARRAY:
+		binds = spec["binds"]
+	var signal_args: Array = signal_info["args"]
+	var method_args: Array = method_info["args"]
+	var defaults: Array = method_info["default_args"]
+	var flags: int = method_info["flags"]
+	var passed: int = signal_args.size() + binds.size()
+	var required: int = method_args.size() - defaults.size()
+	if flags & METHOD_FLAG_VARARG == 0 and (passed < required or passed > method_args.size()):
+		var accepted: String = str(required) if required == method_args.size() else "%d..%d" % [required, method_args.size()]
+		_errors.append("%s: the method takes %s arguments, but the signal passes %d (+%d binds)" % [label, accepted, signal_args.size(), binds.size()])
+		return
+
+	var conn_flags: int = CONNECT_PERSIST
+	if typeof(spec.get("flags")) == TYPE_FLOAT or typeof(spec.get("flags")) == TYPE_INT:
+		var f: float = spec["flags"]
+		conn_flags |= int(f)
+	var callable: Callable = Callable(to_node, method)
+	if not binds.is_empty():
+		callable = callable.bindv(binds)
+	var err: Error = from_node.connect(signal_name, callable, conn_flags)
+	if err != OK:
+		_errors.append("%s: connect failed: %s" % [label, error_string(err)])
+		return
+	_connection_count += 1
 
 
 ## Приводит JSON-значение к типу свойства узла или ресурса и присваивает его:
