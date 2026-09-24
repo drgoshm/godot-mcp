@@ -80,8 +80,13 @@ Node spec: {"type": "CharacterBody2D", "name": "Player", "script": "res://player
   "properties": {"position": "Vector2(100, 50)", "collision_layer": 2, "texture": "res://icon.svg"},
   "groups": ["players"], "children": [ ...node specs... ]}
 Use {"scene": "res://enemy.tscn", "name": "Enemy1"} instead of "type" to instance another scene.
-Property values: numbers/bools as JSON; resource properties as res:// paths; strings for String/NodePath props;
-anything else as a Godot literal string such as "Vector2(1, 2)" or "Color(1, 0, 0, 1)".`
+Property values: numbers/bools as JSON; strings for String/NodePath props;
+anything else as a Godot literal string such as "Vector2(1, 2)" or "Color(1, 0, 0, 1)".
+Resource properties take a res:// path or an embedded resource object saved inside the scene:
+  "shape": {"_type": "RectangleShape2D", "size": "Vector2(32, 48)"}
+  "texture": {"_type": "GradientTexture2D", "gradient": {"_type": "Gradient", "colors": "PackedColorArray(1,0,0,1, 0,0,1,1)"}}
+Other keys of the object are the resource's properties (same rules, nesting allowed). "_type" may be a class_name
+(run godot_import after creating it) or pass "_script": "res://item.gd". Arrays such as Array[ItemData] take lists of these.`
 
 func registerEngineTools(s *mcp.Server, d *Deps) {
 	mcp.AddTool(s, &mcp.Tool{

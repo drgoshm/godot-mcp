@@ -5,11 +5,13 @@
 ## Запуск: godot --headless --path <proj> --script scene_builder.gd -- --spec=<file.json>
 ## Результат печатается одной строкой: MCP_RESULT:{...json...}
 ##
-## Всё типизировано явно: в проекте могут быть включены
-## «warnings as errors», и тогда нетипизированный код не загрузится.
+## Скрипт выполняется с настройками проекта, а в нём предупреждения могут быть
+## ошибками. Поэтому код не даёт ни одного предупреждения GDScript (это проверяет
+## TestCreateSceneStrictWarnings): Variant сначала кладётся в типизированную
+## переменную, а ошибки копятся в Array[String], чей append ничего не возвращает.
 extends SceneTree
 
-var _errors: PackedStringArray = PackedStringArray()
+var _errors: Array[String] = []
 var _node_count: int = 0
 
 
@@ -36,24 +38,29 @@ func _init() -> void:
 	if typeof(spec.get("root")) != TYPE_DICTIONARY:
 		_finish({}, "root node spec is required")
 		return
+	var root_spec: Dictionary = spec["root"]
 
-	var root: Node = _build(spec["root"], null, null)
-	if root == null or not _errors.is_empty():
-		if root != null:
-			root.free()
-		_finish({}, "; ".join(_errors))
+	var scene_root: Node = _build(root_spec, null, null)
+	if scene_root == null or not _errors.is_empty():
+		if scene_root != null:
+			scene_root.free()
+		_finish({}, "; ".join(PackedStringArray(_errors)))
 		return
 
 	var packed: PackedScene = PackedScene.new()
-	var pack_err: Error = packed.pack(root)
+	var pack_err: Error = packed.pack(scene_root)
 	if pack_err != OK:
-		root.free()
+		scene_root.free()
 		_finish({}, "PackedScene.pack failed: " + error_string(pack_err))
 		return
 
-	DirAccess.make_dir_recursive_absolute(out_path.get_base_dir())
+	var dir_err: Error = DirAccess.make_dir_recursive_absolute(out_path.get_base_dir())
+	if dir_err != OK:
+		scene_root.free()
+		_finish({}, "cannot create directory %s: %s" % [out_path.get_base_dir(), error_string(dir_err)])
+		return
 	var save_err: Error = ResourceSaver.save(packed, out_path)
-	root.free()
+	scene_root.free()
 	if save_err != OK:
 		_finish({}, "ResourceSaver.save failed: " + error_string(save_err))
 		return
@@ -78,11 +85,11 @@ func _build(node_spec: Dictionary, parent: Node, owner_node: Node) -> Node:
 
 	if is_instance:
 		var scene_path: String = str(node_spec["scene"])
-		var res: Resource = load(scene_path)
-		if not (res is PackedScene):
+		var scene: PackedScene = load(scene_path) as PackedScene
+		if scene == null:
 			_errors.append("cannot load scene " + scene_path)
 			return null
-		node = (res as PackedScene).instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
+		node = scene.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
 	else:
 		var type_name: String = str(node_spec.get("type", "Node"))
 		if not ClassDB.class_exists(type_name) or not ClassDB.is_parent_class(type_name, "Node"):
@@ -91,7 +98,7 @@ func _build(node_spec: Dictionary, parent: Node, owner_node: Node) -> Node:
 		if not ClassDB.can_instantiate(type_name):
 			_errors.append("node type '%s' is abstract" % type_name)
 			return null
-		node = ClassDB.instantiate(type_name) as Node
+		node = ClassDB.instantiate(type_name)
 
 	node.name = str(node_spec.get("name", node.get_class()))
 	_node_count += 1
@@ -104,66 +111,233 @@ func _build(node_spec: Dictionary, parent: Node, owner_node: Node) -> Node:
 
 	if node_spec.has("script"):
 		var script_path: String = str(node_spec["script"])
-		var script: Resource = load(script_path)
-		if not (script is Script):
+		var script: Script = load(script_path) as Script
+		if script == null:
 			_errors.append("cannot load script " + script_path)
 		else:
 			node.set_script(script)
 
-	var props: Variant = node_spec.get("properties", {})
-	if typeof(props) == TYPE_DICTIONARY:
-		for key: Variant in (props as Dictionary).keys():
-			_set_property(node, str(key), (props as Dictionary)[key])
+	if typeof(node_spec.get("properties")) == TYPE_DICTIONARY:
+		var props: Dictionary = node_spec["properties"]
+		for key: Variant in props.keys():
+			_set_property(node, str(node.name), str(key), props[key])
 
-	var groups: Variant = node_spec.get("groups", [])
-	if typeof(groups) == TYPE_ARRAY:
+	if typeof(node_spec.get("groups")) == TYPE_ARRAY:
+		var groups: Array = node_spec["groups"]
 		for g: Variant in groups:
 			node.add_to_group(str(g), true)
 
-	var children: Variant = node_spec.get("children", [])
-	if typeof(children) == TYPE_ARRAY:
+	if typeof(node_spec.get("children")) == TYPE_ARRAY:
+		var children: Array = node_spec["children"]
 		var child_owner: Node = node if owner_node == null else owner_node
 		for child: Variant in children:
 			if typeof(child) == TYPE_DICTIONARY:
-				_build(child, node, child_owner)
+				var child_spec: Dictionary = child
+				var _child: Node = _build(child_spec, node, child_owner)
 
 	return node
 
 
-## Приводит JSON-значение к типу свойства:
-## - Object-свойства (texture, mesh...) получают load() по res://-пути;
+## Приводит JSON-значение к типу свойства узла или ресурса и присваивает его:
+## - Object-свойства (texture, shape, mesh...) принимают res://-путь или
+##   встроенный ресурс {"_type": "RectangleShape2D", "size": "Vector2(32, 32)"};
+## - массивы (в том числе Array[MyResource]) — поэлементно по тем же правилам;
 ## - String/StringName/NodePath берутся как есть;
 ## - остальное из строки разбирается как литерал Godot: "Vector2(10, 20)", "Color(1, 0, 0)".
-func _set_property(node: Node, prop: String, raw: Variant) -> void:
-	var prop_type: int = -1
-	for info: Dictionary in node.get_property_list():
-		if info["name"] == prop:
-			prop_type = info["type"]
+## label — путь для сообщений об ошибках, например "Player/Shape.shape".
+func _set_property(target: Object, label: String, prop: String, raw: Variant) -> void:
+	var info: Dictionary = {}
+	for p: Dictionary in target.get_property_list():
+		if p["name"] == prop:
+			info = p
 			break
-	if prop_type == -1:
-		_errors.append("%s has no property '%s'" % [node.name, prop])
+	var where: String = label + "." + prop
+	if info.is_empty():
+		_errors.append("%s has no property '%s'" % [label, prop])
 		return
+	var prop_type: int = info["type"]
 
 	var value: Variant = raw
-	if typeof(raw) == TYPE_STRING:
+	if _is_resource_spec(raw):
+		if prop_type != TYPE_OBJECT and prop_type != TYPE_NIL:
+			_errors.append("%s: a {\"_type\": ...} resource was given, but the property is %s" % [where, type_string(prop_type)])
+			return
+		var res_spec: Dictionary = raw
+		value = _make_resource(res_spec, where)
+		if value == null:
+			return
+	elif typeof(raw) == TYPE_ARRAY and (prop_type == TYPE_ARRAY or prop_type == TYPE_NIL):
+		var items: Array = raw
+		value = _convert_array(target.get(prop), items, where)
+		if value == null:
+			return
+	elif typeof(raw) == TYPE_STRING:
 		var s: String = raw
-		match prop_type:
-			TYPE_STRING, TYPE_STRING_NAME, TYPE_NODE_PATH:
-				value = s
-			TYPE_OBJECT:
-				value = load(s) if (s.begins_with("res://") or s.begins_with("uid://")) else null
-				if value == null:
-					_errors.append("%s.%s: cannot load resource '%s'" % [node.name, prop, s])
-					return
-			_:
-				value = str_to_var(s)
-				if value == null:
-					_errors.append("%s.%s: cannot parse '%s' as a Godot value" % [node.name, prop, s])
-					return
-	elif prop_type == TYPE_INT and typeof(raw) == TYPE_FLOAT:
-		value = int(raw)  # JSON не различает int и float
+		value = _parse_string(s, prop_type, where)
+		if value == null:
+			return
+	elif typeof(raw) == TYPE_FLOAT and prop_type == TYPE_INT:
+		var f: float = raw
+		value = int(f)  # JSON не различает int и float
 
-	node.set(prop, value)
+	target.set(prop, value)
+
+	# Нативный сеттер молча превращает объект не того класса в null, а
+	# типизированное свойство скрипта просто не меняется. Проверяем чтением.
+	if typeof(value) == TYPE_OBJECT and target.get(prop) != value:
+		_errors.append("%s: cannot assign %s, the property expects %s" % [where, _describe(value), _expected_type(info)])
+
+
+## Строка -> значение: путь к ресурсу для Object-свойств, иначе литерал Godot.
+## Возвращает null и пишет ошибку, если разобрать не удалось.
+func _parse_string(s: String, prop_type: int, where: String) -> Variant:
+	match prop_type:
+		TYPE_STRING, TYPE_STRING_NAME, TYPE_NODE_PATH:
+			return s
+		TYPE_NIL:  # нетипизированное свойство или элемент: литерал, если разбирается, иначе строка
+			var parsed: Variant = str_to_var(s)
+			return parsed if parsed != null else s
+		TYPE_OBJECT:
+			var res: Resource = load(s) if (s.begins_with("res://") or s.begins_with("uid://")) else null
+			if res == null:
+				_errors.append("%s: cannot load resource '%s'" % [where, s])
+			return res
+	var value: Variant = str_to_var(s)
+	if value == null:
+		_errors.append("%s: cannot parse '%s' as a Godot value" % [where, s])
+	return value
+
+
+func _is_resource_spec(v: Variant) -> bool:
+	if typeof(v) != TYPE_DICTIONARY:
+		return false
+	var d: Dictionary = v
+	return d.has("_type") or d.has("_script")
+
+
+## Создаёт встроенный ресурс по спецификации
+## {"_type": "Класс или class_name", "_script": "res://x.gd", ...свойства}.
+## PackedScene.pack сохранит его внутри .tscn как sub_resource.
+func _make_resource(spec: Dictionary, where: String) -> Resource:
+	var res: Resource = null
+	var type_name: String = str(spec.get("_type", ""))
+
+	if spec.has("_script"):
+		res = _instantiate_script(str(spec["_script"]), where)
+	elif ClassDB.class_exists(type_name):
+		if not ClassDB.is_parent_class(type_name, "Resource"):
+			_errors.append("%s: '%s' is not a Resource type" % [where, type_name])
+			return null
+		if not ClassDB.can_instantiate(type_name):
+			_errors.append("%s: resource type '%s' is abstract; use a concrete subclass" % [where, type_name])
+			return null
+		res = ClassDB.instantiate(type_name)
+	else:
+		var script_path: String = _global_class_path(type_name)
+		if script_path.is_empty():
+			_errors.append("%s: unknown resource type '%s' (for a class_name resource, run godot_import first or pass _script)" % [where, type_name])
+			return null
+		res = _instantiate_script(script_path, where)
+	if res == null:
+		return null
+
+	var label: String = "%s<%s>" % [where, _describe(res)]
+	for key: Variant in spec.keys():
+		var k: String = str(key)
+		if k == "_type" or k == "_script":
+			continue
+		_set_property(res, label, k, spec[key])
+	return res
+
+
+func _instantiate_script(script_path: String, where: String) -> Resource:
+	var script: Script = load(script_path) as Script
+	if script == null:
+		_errors.append("%s: cannot load script %s" % [where, script_path])
+		return null
+	if not script.can_instantiate():
+		_errors.append("%s: cannot instantiate %s" % [where, script_path])
+		return null
+	# new() есть у GDScript и CSharpScript, но не у базового Script — зовём динамически.
+	var obj: Variant = script.call("new")
+	if not (obj is Resource):
+		if obj is Object and not (obj is RefCounted):
+			var o: Object = obj
+			o.free()
+		_errors.append("%s: %s does not extend Resource" % [where, script_path])
+		return null
+	var res: Resource = obj
+	return res
+
+
+## Путь скрипта с данным class_name из кеша глобальных классов проекта.
+func _global_class_path(class_name_: String) -> String:
+	for c: Dictionary in ProjectSettings.get_global_class_list():
+		if str(c["class"]) == class_name_:
+			return str(c["path"])
+	return ""
+
+
+## Преобразует JSON-массив, сохраняя тип текущего значения свойства
+## (Array[MyResource]): элементы-словари становятся ресурсами, строки — путями или литералами.
+func _convert_array(current: Variant, raw: Array, where: String) -> Variant:
+	var out: Array = []
+	if current is Array:
+		var cur: Array = current
+		out = cur.duplicate()
+		out.clear()
+	var elem_type: int = out.get_typed_builtin() if out.is_typed() else TYPE_NIL
+	for i: int in raw.size():
+		var item: Variant = raw[i]
+		var item_where: String = "%s[%d]" % [where, i]
+		if _is_resource_spec(item):
+			var item_spec: Dictionary = item
+			item = _make_resource(item_spec, item_where)
+		elif typeof(item) == TYPE_STRING:
+			var s: String = item
+			item = _parse_string(s, elem_type, item_where)
+		elif typeof(item) == TYPE_FLOAT and elem_type == TYPE_INT:
+			var f: float = item
+			item = int(f)
+		if item == null and typeof(raw[i]) != TYPE_NIL:
+			return null  # ошибка уже записана
+		var before: int = out.size()
+		out.append(item)
+		if out.size() == before:
+			_errors.append("%s: %s does not fit the array element type %s" % [item_where, _describe(item), _array_elem_type(out)])
+			return null
+	return out
+
+
+func _array_elem_type(arr: Array) -> String:
+	var name_: String = _script_class_name(arr.get_typed_script())
+	if not name_.is_empty():
+		return name_
+	if not arr.get_typed_class_name().is_empty():
+		return str(arr.get_typed_class_name())
+	return type_string(arr.get_typed_builtin())
+
+
+func _describe(value: Variant) -> String:
+	if value is Resource:
+		var res: Resource = value
+		var name_: String = _script_class_name(res.get_script())
+		return name_ if not name_.is_empty() else res.get_class()
+	return type_string(typeof(value))
+
+
+## class_name скрипта или "", если скрипта нет или он безымянный.
+func _script_class_name(v: Variant) -> String:
+	if not (v is Script):
+		return ""
+	var s: Script = v
+	return str(s.get_global_name())
+
+
+func _expected_type(info: Dictionary) -> String:
+	var hint: String = str(info.get("hint_string", ""))
+	var t: int = info["type"]
+	return hint if not hint.is_empty() else type_string(t)
 
 
 func _finish(result: Dictionary, error: String) -> void:

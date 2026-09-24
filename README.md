@@ -42,12 +42,24 @@ Claude Desktop / Claude Code (`.mcp.json` или `claude_desktop_config.json`):
 | `godot_edit_file` | замена уникального фрагмента (в стиле str_replace) |
 | `godot_check_script` | `--check-only` для одного или нескольких `.gd`, ошибки с файлом и строкой |
 | `godot_import` | headless-импорт ассетов и обновление кеша `class_name` |
-| `godot_create_scene` | сборка `.tscn` из JSON-дерева узлов через `PackedScene` + `ResourceSaver` |
+| `godot_create_scene` | сборка `.tscn` из JSON-дерева узлов через `PackedScene` + `ResourceSaver`, со встроенными подресурсами |
 | `godot_run_script` | одноразовый GDScript (`extends SceneTree`) внутри проекта |
 | `godot_run_project` | запуск игры или сцены в фоне, возвращает `run_id` и первые секунды вывода |
 | `godot_get_output` | новый вывод по курсору `since`, long-poll, разобранные ошибки |
 | `godot_stop_project` | SIGTERM → SIGKILL всей группы процессов |
 | `godot_list_runs` | последние запуски и их статус |
+
+### Встроенные подресурсы в `godot_create_scene`
+
+Свойству-ресурсу можно передать не только путь `res://`, но и объект с ключом `_type`. Такой ресурс создаётся движком и сохраняется внутри `.tscn` как `sub_resource`:
+
+```json
+{"type": "CollisionShape2D", "name": "Shape", "properties": {
+  "shape": {"_type": "RectangleShape2D", "size": "Vector2(32, 48)"}
+}}
+```
+
+Остальные ключи объекта — свойства ресурса, по тем же правилам, что и у узлов, поэтому вложенность работает (`GradientTexture2D` → `Gradient`). В `_type` можно указать `class_name` пользовательского ресурса (после `godot_import`) или передать `"_script": "res://item.gd"`. Типизированные массивы вроде `Array[ItemData]` принимают списки таких объектов. Ошибки говорят, что ожидалось: `CollisionShape2D.shape: cannot assign Gradient, the property expects Shape2D`.
 
 ## Безопасность
 
